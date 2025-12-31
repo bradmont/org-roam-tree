@@ -33,7 +33,7 @@
           ;; File-level section (collapsible)
           (magit-insert-section (org-roam-tree-file file)
             (let ((prefix (org-roam-tree-make-prefix 1 t nil)))
-              (magit-insert-heading (concat prefix (file-name-nondirectory file))))
+              (magit-insert-heading (concat prefix (file-name-nondirectory file) (format " (%d)" (length nodes)) )))
             
             ;; Iterate over nodes in this file
 
@@ -50,7 +50,16 @@
                          ;; prepend prefix to first line
                          (save-excursion
                            (goto-char start)
-                           (insert prefix)))))))))))
+                           ;; First visual line gets the branch prefix
+                           (insert (org-roam-tree-make-prefix 2 t is-last-node))
+                           ;; Move down visual lines for wrapped content
+                           (while (line-move-visual 1 t) ;; move 1 visual line, no error
+                             (beginning-of-visual-line)
+                             ( if (and is-last-node (looking-at-p "^\\s-*$")) ; empty lines are between nodes
+                             (insert (org-roam-tree-make-prefix 1 nil nil))
+                             (insert (org-roam-tree-make-prefix 2 nil is-last-node))))
+                           )
+                         )))))))))
 
 (defun org-roam-tree-make-prefix (depth is-node is-last)
   "Generate a tree-style prefix string for a line.
@@ -61,15 +70,16 @@ IS-LAST is t if this is the last sibling."
   (let ((prefix ""))
     ;; repeat vertical line + space for each ancestor level
     (when (> depth 1)
-      (setq prefix (mapconcat (lambda (_) "│ ")
+      (setq prefix (mapconcat (lambda (_) "│  ")
                                (make-list (1- depth) nil)
                                "")))
     ;; add branch for current item
     (setq prefix (concat prefix
                          (cond
-                          (is-last "└─ ")
+                          ((and is-last is-node) "└─ ")
                           (is-node "├─ ")
-                          (t "│"))))
+                          ((not is-last) "│ ")
+                          (t "  "))))
     prefix))
 
 
