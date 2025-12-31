@@ -54,11 +54,12 @@
                            (insert (org-roam-tree-make-prefix 2 t is-last-node))
                            ;; Move down visual lines for wrapped content
                            (while (line-move-visual 1 t) ;; move 1 visual line, no error
+                             (unless (= (point) (point-max))
                              (beginning-of-visual-line)
                              ( if (and is-last-node (looking-at-p "^\\s-*$")) ; empty lines are between nodes
                              (insert (org-roam-tree-make-prefix 1 nil nil))
                              (insert (org-roam-tree-make-prefix 2 nil is-last-node))))
-                           )
+                           ))
                          )))))))))
 
 (defun org-roam-tree-make-prefix (depth is-node is-last)
