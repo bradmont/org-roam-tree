@@ -34,6 +34,15 @@
 ;;(add-to-list 'org-roam-mode-sections
 ;;             #'org-roam-tree-backlinks-section t)
 
+(defgroup org-roam-tree nil
+  "Tree-style display extensions for Org-roam."
+  :group 'org-roam)
+
+(defcustom org-roam-tree-collapse-after-init t
+  "Whether to collapse all file-level branches after rendering the Org-roam tree."
+  :type 'boolean
+  :group 'org-roam-tree)
+
 (cl-defun org-roam-tree-backlinks-section (node &key (section-heading "Backlinks Tree:"))
   "A tree-style backlinks section for NODE, grouping by source file."
 (with-selected-window (get-buffer-window org-roam-buffer)
@@ -97,8 +106,12 @@
                                  )))))))
           (set-window-margins (selected-window)
                               (car old-margin)
-                              (cdr old-margin))))
-      ))))
+                              (cdr old-margin)))))
+    (when org-roam-tree-collapse-after-init
+      (org-roam-tree-collapse-all-files)
+      (goto-char (point-min))
+      )
+    )))
 
 
 (defun org-roam-tree-make-prefix (depth is-node is-last)
@@ -147,6 +160,17 @@ NODE defaults to `org-roam-node-at-point` if nil."
          (push (cons file (nreverse backlinks)) result))
        table)
       result)))
+
+(defun org-roam-tree-collapse-all-files ()
+  "Collapse all top-level file branches in the Org-roam tree buffer."
+  (interactive)
+  (when (derived-mode-p 'org-roam-mode)
+    (goto-char (point-min))
+    (condition-case nil
+        (while (< (line-number-at-pos) (line-number-at-pos (point-max)))
+          (next-line)
+          (magit-section-hide (magit-current-section)))
+      (error (message "done")))))
 
 
 (provide 'org-roam-tree)
