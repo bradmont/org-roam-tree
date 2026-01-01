@@ -36,6 +36,9 @@
 
 (cl-defun org-roam-tree-backlinks-section (node &key (section-heading "Backlinks Tree:"))
   "A tree-style backlinks section for NODE, grouping by source file."
+(with-selected-window (get-buffer-window org-roam-buffer)
+  ;; insert your content and prefixes here
+
   (when-let ((tree (org-roam-tree-backlinks node)))
     (magit-insert-section (org-roam-tree-backlinks)
       ;; Top-level heading
@@ -95,7 +98,7 @@
           (set-window-margins (selected-window)
                               (car old-margin)
                               (cdr old-margin))))
-      )))
+      ))))
 
 
 (defun org-roam-tree-make-prefix (depth is-node is-last)
