@@ -16,12 +16,13 @@
 ;;;  Description
 ;;  
 ;; Creates a tree-like backlinks list you can add to your org-roam buffer, which
-;; organizes backlinks by their org file source. May extend in the future to
-;; allow for different groupings and deeper trees, for example, to also follow
+;; organizes backlinks by their org file source. You can reuse the display
+;; logic if you define different groupings and deeper trees, for example, to follow
 ;; the org tree from the files containing backlinks, or maybe arbitrarily grouped
 ;; results, which could be helpful with org-roam-ql. As it stands, you can
-;; reuse the display function for other purposes if you change what
-;; =org-roam-tree-backlinks= returns.
+;; quickly make new display sections. Look at =org-roam-tree-backlinks-section for
+;; the pattern, and =org-roam-tree-backlinks= for an example of how to generate
+;; the data structure you need.
 ;;  
 ;;; Code:
 
@@ -45,8 +46,17 @@
 
 (cl-defun org-roam-tree-backlinks-section (node &key (section-heading "Backlinks Tree:"))
   "A tree-style backlinks section for NODE, grouping by source file."
+  (org-roam-tree-section node :section-heading section-heading :data-getter #'org-roam-tree-backlinks))
+
+
+(cl-defun org-roam-tree-section (node &key (section-heading "Tree Section:") (data-getter #'org-roam-tree-backlinks))
+  "Generalized logic for a tree in the org-roam buffer. Can 
+DATA-GETTER is a function that returns a tree in the format:
+((parent . (backlink backlink ...)) ...) where parent is a string and
+backlinks are org-roam backlink objects"
+
 (with-org-roam-tree-layout
- (when-let ((tree (org-roam-tree-backlinks node)))
+ (when-let ((tree (funcall data-getter node)))
    (magit-insert-section (org-roam-tree-backlinks)
      ;; Top-level heading
      (magit-insert-heading section-heading)
