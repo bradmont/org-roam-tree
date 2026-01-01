@@ -117,22 +117,36 @@
 (defun org-roam-tree-make-prefix (depth is-node is-last)
   "Generate a tree-style prefix string for a line.
 
-DEPTH is the nesting level (1 = file).  
-IS-NODE is t if this is a child node.  
-IS-LAST is t if this is the last sibling."
-  (let ((prefix ""))
-    ;; repeat vertical line + space for each ancestor level
-    (when (> depth 1)
-      (setq prefix (mapconcat (lambda (_) "│  ")
-                               (make-list (1- depth) nil)
-                               "")))
-    ;; add branch for current item
-    (setq prefix (concat prefix
-                         (cond
-                          ((and is-last is-node) "└─ ")
-                          (is-node "├─ ")
-                          ((not is-last) "│ ")
-                          (t "  "))))
+DEPTH is the nesting level (1 = file).
+IS-NODE is t if this is a child node.
+IS-LAST may be a boolean or a list of booleans indicating whether
+each depth level is the last sibling. If boolean, expand to a list of
+(nil nil nil ... is-last); so assumes only the deepest level is specified
+and the branch is not last at any other level"
+  (let* ((is-last-list
+          (if (listp is-last)
+              is-last
+            (append (make-list (1- depth) nil)
+                    (list is-last))))
+         (prefix ""))
+
+    ;; vertical guides for ancestor levels
+    (dotimes (i (1- depth))
+      (setq prefix
+            (concat prefix
+                    (if (nth i is-last-list)
+                        "   "   ; no vertical line if last at that level
+                      "│  "))))
+
+    ;; current node connector
+    (setq prefix
+          (concat prefix
+                  (cond
+                   ((and is-node (car (last is-last-list))) "└─ ")
+                   (is-node "├─ ")
+                   ((not (car (last is-last-list))) "│ ")
+                   (t "  "))))
+
     prefix))
 
 
