@@ -5,15 +5,6 @@
 Creates a tree-like backlinks list you can add to your org-roam buffer, which organizes backlinks by their org file source. I may extend it in the future to allow for different groupings and deeper trees. This could, for example, allow the tree to follow the org tree from the files containing multiple backlinks, or eve arbitrarily grouped results, which could be helpful with org-roam-ql. As it stands, you can reuse the display function for other purposes if you change what =org-roam-tree-backlinks= returns.
 
 [[file:preview.png]]
- 
- 
- 
- 
- 
- 
- 
- 
- 
 
 *THIS HAS ROUGH EDGES*, it's functional, but a work in progress.
 * Usage
@@ -29,3 +20,10 @@ Creates a tree-like backlinks list you can add to your org-roam buffer, which or
 (add-to-list 'org-roam-mode-sections
              #'org-roam-tree-backlinks-section t)
 #+end_src
+
+You can customize =org-roam-tree-collapse-after-init= to enable/disable auto-collapse after building the buffer. 
+* TODOs:
+
+** [ ] remember & restore collapsed states
+** [ ] remove vertical bar  on final file
+** [ ] fix wrapping next header when collapsing a note
