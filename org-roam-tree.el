@@ -7,17 +7,32 @@
 ;; Created: décembre 31, 2025
 ;; Modified: décembre 31, 2025
 ;; Version: 0.0.1
-;; Keywords: abbrev bib c calendar comm convenience data docs emulations extensions faces files frames games hardware help hypermedia i18n internal languages lisp local maint mail matching mouse multimedia news outlines processes terminals tex text tools unix vc wp
+;; Keywords: org-roam backlinks tree
 ;; Homepage: https://github.com/brad/org-roam-tree
 ;; Package-Requires: ((emacs "24.3"))
 ;;
 ;; This file is not part of GNU Emacs.
 ;;
-;;; Commentary:
-;;
-;;  Description
-;;
+;;;  Description
+;;  
+;; Creates a tree-like backlinks list you can add to your org-roam buffer, which
+;; organizes backlinks by their org file source. May extend in the future to
+;; allow for different groupings and deeper trees, for example, to also follow
+;; the org tree from the files containing backlinks, or maybe arbitrarily grouped
+;; results, which could be helpful with org-roam-ql. As it stands, you can
+;; reuse the display function for other purposes if you change what
+;; =org-roam-tree-backlinks= returns.
+;;  
 ;;; Code:
+
+;; Enable by adding org-roam-tree-backlinks-section to org-roam-mode-sections
+;; 
+;; Show only this section in the org-roam buffer:
+;;(setq! org-roam-mode-sections '(org-roam-tree-backlinks-section))
+;;
+;; Add this section with the others in the org-roam buffer:
+;;(add-to-list 'org-roam-mode-sections
+;;             #'org-roam-tree-backlinks-section t)
 
 (cl-defun org-roam-tree-backlinks-section (node &key (section-heading "Backlinks Tree:"))
   "A tree-style backlinks section for NODE, grouping by source file."
@@ -81,6 +96,7 @@
                               (car old-margin)
                               (cdr old-margin))))
       )))
+
 
 (defun org-roam-tree-make-prefix (depth is-node is-last)
   "Generate a tree-style prefix string for a line.
