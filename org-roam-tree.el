@@ -30,6 +30,7 @@
 ;; 
 ;; Show only this section in the org-roam buffer:
 ;;(setq! org-roam-mode-sections '(org-roam-tree-backlinks-section))
+;;(setq! org-roam-mode-sections '(org-roam-tree-backlinks-section org-roam-tree-reflinks-section))
 ;;
 ;; Add this section with the others in the org-roam buffer:
 ;;(add-to-list 'org-roam-mode-sections
@@ -48,6 +49,9 @@
   "A tree-style backlinks section for NODE, grouping by source file."
   (org-roam-tree-section node :section-heading section-heading :data-getter #'org-roam-tree-backlinks))
 
+(cl-defun org-roam-tree-reflinks-section (node &key (section-heading "Reflinks Tree:"))
+  "A tree-style backlinks section for NODE, grouping by source file."
+  (org-roam-tree-section node :section-heading section-heading :data-getter #'org-roam-tree-reflinks))
 
 (cl-defun org-roam-tree-section (node &key (section-heading "Tree Section:") (data-getter #'org-roam-tree-backlinks))
   "Generalized logic for a tree in the org-roam buffer. Can 
@@ -76,10 +80,19 @@ backlinks are org-roam backlink objects"
                       for node-index from 1
                       for is-last-node = (= node-index node-count) do
                       (let ((start (point)))
-                        (org-roam-node-insert-section
-                         :source-node (org-roam-backlink-source-node n)
-                         :point (org-roam-backlink-point n)
-                         :properties (org-roam-backlink-properties n))
+(cl-typecase n
+  (org-roam-backlink
+   (org-roam-node-insert-section
+    :source-node (org-roam-backlink-source-node n)
+    :point (org-roam-backlink-point n)
+    :properties (org-roam-backlink-properties n)))
+  (org-roam-reflink
+   (org-roam-node-insert-section
+    :source-node (org-roam-reflink-source-node n)
+    :point (org-roam-reflink-point n)
+    :properties (org-roam-reflink-properties n))))
+
+                        
                         
                         (insert " \n") ; hack to fix wrap on section collapse.
 
@@ -210,6 +223,31 @@ NODE defaults to `org-roam-node-at-point` if nil."
       (maphash
        (lambda (file backlinks)
          (push (cons file (nreverse backlinks)) result))
+       table)
+      result)))
+
+(defun org-roam-tree-reflinks (&optional node)
+  "Return backlinks of NODE grouped by source file.
+
+Return value:
+  ((FILE . (BACKLINK BACKLINK ...)) ...)
+
+NODE defaults to `org-roam-node-at-point` if nil."
+  (require 'org-roam)
+  (let* ((node (or node (org-roam-node-at-point)))
+         (reflinks (org-roam-reflinks-get node ))
+         (table (make-hash-table :test 'equal)))
+    (dolist (bl reflinks)
+      (let* ((src (org-roam-reflink-source-node bl))
+             (file (org-roam-node-file src)))
+        (when src
+          (puthash file
+                   (cons bl (gethash file table))
+                   table))))
+    (let (result)
+      (maphash
+       (lambda (file reflinks)
+         (push (cons file (nreverse reflinks)) result))
        table)
       result)))
 
