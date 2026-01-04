@@ -29,7 +29,8 @@ Eventually I hope to allow arbitrary depth trees, but for the moment it's limite
 
 using both =org-roam-tree-backlinks-section= and =org-roam-tree-reflinks-section= at the same time is *currently broken* (or generally, using more than one tree, if you implement your own)
 
-You can customize =org-roam-tree-collapse-after-init= to enable/disable auto-collapse after building the buffer. 
+You can customize
+=org-roam-tree-default-visible= to enable/disable auto-collapse after building the buffer. 
 
 * TODOs:
 

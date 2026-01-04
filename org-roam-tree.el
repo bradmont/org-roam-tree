@@ -47,23 +47,24 @@
   "Tree-style display extensions for Org-roam."
   :group 'org-roam)
 
-(defcustom org-roam-tree-collapse-after-init t
+(defcustom org-roam-tree-default-visible t
   "Whether to collapse all file-level branches after rendering the Org-roam tree."
   :type 'boolean
   :group 'org-roam-tree)
 
 
-(defvar org-roam-tree-fold-state (make-hash-table :test 'equal)
+(defvar org-roam-tree-visible-state (make-hash-table :test 'equal)
   "Stores fold states for files per node.")
 
-(defun org-roam-tree--file-fold-state (node file)
-  "Return t if FILE under NODE should be folded."
-  (gethash (cons node file) org-roam-tree-fold-state)
+(defun org-roam-tree--file-visible-state (node file)
+  "Return t if FILE under NODE should be folded, either because it has been
+toggled by user or because of -default-visibility."
+  (gethash (cons node file) org-roam-tree-visible-state org-roam-tree-default-visible)
       )
 
-(defun org-roam-tree--set-file-fold-state (node file hidden)
+(defun org-roam-tree--set-file-visible-state (node file hidden)
   "Store fold state for FILE under NODE."
-  (puthash (cons node file) hidden org-roam-tree-fold-state))
+  (puthash (cons node file) hidden org-roam-tree-visible-state))
 
 
 (cl-defun org-roam-tree-backlinks-section (node &key (section-heading "Backlinks Tree:"))
@@ -103,7 +104,7 @@ buffer."
          ;; File-level section (collapsible)
 (magit-insert-section
  (intern (concat "org-roam-tree-file-" (file-name-nondirectory file)))
- :hide org-roam-tree-collapse-after-init
+ :hide org-roam-tree-default-visible
 
            (let ((prefix (org-roam-tree-make-prefix 1 t is-last-file)))
              (magit-insert-heading (concat prefix (file-name-nondirectory file) (format " (%d)" (length nodes)) )))
@@ -136,7 +137,7 @@ buffer."
                           (org-roam-tree--prefix-node-content (list is-last-file is-last-node))
                           )))))
 
-                          (if (org-roam-tree--file-fold-state (org-roam-node-id node) (file-name-nondirectory file))
+                          (unless (org-roam-tree--file-visible-state (org-roam-node-id node) (file-name-nondirectory file))
                             (save-excursion
                               (forward-line -1)
                             (magit-section-hide (magit-current-section))
@@ -174,7 +175,7 @@ BODY is the code that renders the tree content."
       (node org-roam-current-node)
              (file (string-remove-prefix "org-roam-tree-file-" (oref section value)))
              (hidden (oref section hidden)))  ;; true if folded
-        (org-roam-tree--set-file-fold-state (org-roam-node-id node) file hidden)))
+        (org-roam-tree--set-file-visible-state (org-roam-node-id node) file (not hidden))))
 
 (advice-add 'magit-section-toggle :after #'org-roam-tree--track-toggle)
 
