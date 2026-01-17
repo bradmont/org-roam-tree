@@ -82,67 +82,146 @@ toggled by user or because of -default-visibility."
 
 
 
+
+;;;;;;;;;;;;;;;;;;;; TREE DISPLAY METADATA
+;; On building the tree, we store metadata including depth and tree branch parts
+;; (is-last for each level) as text properties, but do not immediately decorate,
+;; as it is quite an expensive operation. We start the tree folded, and decorate
+;; on expand to amortize the display cost.
+ 
+;;;;;; Metadata storage and retrieval functions:
 
-(cl-defun org-roam-tree-section (node &key (section-heading "Tree Section:") (data-getter #'org-roam-tree-backlinks) (section-id 'org-roam-tree-section))
-  "Generalized logic for a tree in the org-roam buffer. Can 
-DATA-GETTER is a function that returns a tree in the format:
-((parent . (backlink backlink ...)) ...) where parent is a string and
-backlinks are org-roam backlink objects.
-SECTION-ID is a symbol to tag this tree's section in the backlinks
-buffer."
+(defconst org-roam-tree--meta-depth 'org-roam-tree-depth)
+(defconst org-roam-tree--meta-is-last 'org-roam-tree-is-last)
+(defconst org-roam-tree--meta-prefixed 'org-roam-tree-prefixed)
 
-(with-org-roam-tree-layout
- (when-let ((tree (funcall data-getter node)))
-   (magit-insert-section  section-id
-     ;; Top-level heading
-     (magit-insert-heading section-heading)
-     ;; Iterate over files
-     (dolist (file-entry tree)
-       (let ((file (car file-entry))
-             (nodes (cdr file-entry))i
-             (is-last-file (eq file-entry (car (last tree)))))
-         ;; File-level section (collapsible)
-(magit-insert-section
- (intern (concat "org-roam-tree-file-" (file-name-nondirectory file)))
- :hide org-roam-tree-default-visible
+(defun org-roam-tree--store-node-metadata (pos depth is-last-vec)
+  "Store tree metadata at POS, the start of a node heading."
+  (add-text-properties
+   pos (1+ pos)
+   (list
+    org-roam-tree--meta-depth depth
+    org-roam-tree--meta-is-last (copy-sequence is-last-vec)
+    org-roam-tree--meta-prefixed nil)))
 
-           (let ((prefix (org-roam-tree-make-prefix 1 t is-last-file)))
-             (magit-insert-heading (concat prefix (file-name-nondirectory file) (format " (%d)" (length nodes)) )))
+(defun org-roam-tree--get-node-metadata (pos)
+  "Return node tree metadata plist stored at POS."
+  (list
+   :depth    (get-text-property pos org-roam-tree--meta-depth)
+   :is-last  (get-text-property pos org-roam-tree--meta-is-last)
+   :prefixed (get-text-property pos org-roam-tree--meta-prefixed)))
 
-           ;; Iterate over nodes in this file
-           (let ((node-count (length nodes)))
-             (cl-loop for n in nodes
-                      for node-index from 1
-                      for is-last-node = (= node-index node-count) do
-                      (let ((start (point)))
-                        (cl-typecase n
-                          (org-roam-backlink
-                           (org-roam-node-insert-section
-                            :source-node (org-roam-backlink-source-node n)
-                            :point (org-roam-backlink-point n)
-                            :properties (org-roam-backlink-properties n)))
-                          (org-roam-reflink
-                           (let ((pt (org-roam-reflink-point n)))
-                             (when pt
-                               (org-roam-node-insert-section
-                                :source-node (org-roam-reflink-source-node n)
-                                :point pt
-                                :properties (org-roam-reflink-properties n))))))
+(defun org-roam-tree--message-node-metadata (pos)
+  "Message node metadata at POS for debugging."
+  (let ((meta (org-roam-tree--get-node-metadata pos)))
+    (message "[tree-node] pos=%d depth=%S is-last=%S prefixed=%S"
+             pos
+             (plist-get meta :depth)
+             (plist-get meta :is-last)
+             (plist-get meta :prefixed))))
 
-                        (insert " \n") ; hack to fix wrap on section collapse.
 
-                        ;; prepend prefix to first line
-                        (save-excursion
-                          (goto-char start)
-                          (org-roam-tree--prefix-node-content (list is-last-file is-last-node))
-                          )))))
+
+;;;;;;;;;;;;;;;;;;;; TREE DISPLAY LOGIC
+(cl-defun org-roam-tree-section
+    (node &key
+          (section-heading "Tree Section:")
+          (data-getter #'org-roam-tree-backlinks)
+          (section-id 'org-roam-tree-section))
 
-                          (unless (org-roam-tree--file-visible-state (org-roam-node-id node) (file-name-nondirectory file))
-                            (save-excursion
-                              (forward-line -1)
-                            (magit-section-hide (magit-current-section))
-                            ))))))))
+  (with-org-roam-tree-layout
+   (when-let ((tree (funcall data-getter node)))
+     (magit-insert-section section-id
+       (magit-insert-heading section-heading)
 
+       ;; tree is now just a list of top-level nodes
+       (let ((count (length tree))
+             (is-last-vec (make-vector 8 nil))
+             (depth 0))
+         (cl-loop for n in tree
+                  for idx from 1
+                  for lastp = (= idx count) do
+                  (aset is-last-vec depth lastp)
+                  (org-roam-tree--render-node
+                   n
+                   (1+ depth)
+                   is-last-vec)))))))
+
+(defun org-roam-tree--render-node (node depth is-last-vec)
+  (let* ((value    (if (consp node) (car node) node))
+         (children (when (consp node) (cdr node)))
+         (leafp    (not (and children (listp children))))
+         (start (point))
+         (section-id
+          (cond
+           ((stringp value)
+            (intern (concat "org-roam-tree-file-"
+                            (file-name-nondirectory value))))
+           ((org-roam-backlink-p value)
+            'org-roam-tree-backlink)
+           ((org-roam-reflink-p value)
+            'org-roam-tree-reflink)
+           (t
+            'org-roam-tree-node))))
+
+    (magit-insert-section section-id value
+      ;; Insert this node’s content
+      (org-roam-tree--insert-leaf value children)
+
+      ;; store tree metadata at node start
+      (org-roam-tree--store-node-metadata start depth is-last-vec)
+      (org-roam-tree--message-node-metadata start)
+
+      ;; Prefix the first line
+      (save-excursion
+        (goto-char start)
+        (org-roam-tree--prefix-node-content is-last-vec depth))
+
+      ;; Recurse into children *inside* the section
+      (unless leafp
+        (let ((count (length children)))
+          (cl-loop for child in children
+                   for idx from 1
+                   for lastp = (= idx count) do
+                   (aset is-last-vec depth lastp)
+                   (org-roam-tree--render-node
+                    child
+                    (1+ depth)
+                    is-last-vec)))))
+    ;;hack to fix wrap on section collapse
+    (save-excursion
+      (if (and (not (bobp))
+                   (forward-line -1)
+                   (looking-at-p "^[││ ]*$"))
+          (delete-line)
+        ))
+    (insert (concat (org-roam-tree-make-prefix depth nil is-last-vec) " \n"))
+
+(defun org-roam-tree--insert-leaf (value children)
+  (cl-typecase value
+    (org-roam-backlink
+     (org-roam-node-insert-section
+      :source-node (org-roam-backlink-source-node value)
+      :point (org-roam-backlink-point value)
+      :properties (org-roam-backlink-properties value)
+
+      
+     ))
+    (org-roam-reflink
+     (when-let ((pt (org-roam-reflink-point value)))
+       (org-roam-node-insert-section
+        :source-node (org-roam-reflink-source-node value)
+        :point pt
+        :properties (org-roam-reflink-properties value)
+
+        ))
+     )
+    (string
+     (magit-insert-heading (format "%s (%d)" (file-name-nondirectory value) (length children))))))
+
+
+
+
 (defmacro with-org-roam-tree-layout (&rest body)
   "Ensure proper visual layout for Org-roam tree rendering.
 
@@ -180,16 +259,16 @@ BODY is the code that renders the tree content."
 (advice-add 'magit-section-toggle :after #'org-roam-tree--track-toggle)
 
 
-(defun org-roam-tree--prefix-node-content (is-last-list)
+(defun org-roam-tree--prefix-node-content (is-last-vec depth)
   "Insert tree prefixes for a node's rendered content.
 
-IS-LAST-LIST is a list of booleans indicating whether each depth
+IS-LAST-VEC is a list of booleans indicating whether each depth
 level is the last sibling."
       ;; First visual line
       (insert (org-roam-tree-make-prefix
-               (length is-last-list)
+               depth
                t
-               is-last-list))
+               is-last-vec))
 
       ;; Subsequent visual lines
       (while (and (not (eobp)) (line-move-visual 1 t))
@@ -204,15 +283,16 @@ level is the last sibling."
               (delete-char 1)))
 
           (insert
-           (if (and (car (last is-last-list))
+           (if (and (aref is-last-vec depth)
                     (looking-at-p "^\\s-*$"))
                ;; end-of-branch spacer
-               (org-roam-tree-make-prefix (1- (length is-last-list)) nil nil)
-             (concat "\n"
+               (org-roam-tree-make-prefix (1- depth) nil nil)
+             (concat "\n" ;; convert visual line wraps to hard breaks; otherwise
+                     ;; inserting prefixs will re-wrap and mix things up
                      (org-roam-tree-make-prefix
-                      (length is-last-list)
+                      depth
                       nil
-                      is-last-list)))))))
+                      is-last-vec)))))))
 
 
 (defun org-roam-tree-make-prefix (depth is-node is-last)
@@ -224,30 +304,21 @@ IS-LAST may be a boolean or a list of booleans indicating whether
 each depth level is the last sibling. If boolean, expand to a list of
 (nil nil nil ... is-last); so assumes only the deepest level is specified
 and the branch is not last at any other level"
-  (let* ((is-last-list
-          (if (listp is-last)
-              is-last
-            (append (make-list (1- depth) nil)
-                    (list is-last))))
-         (prefix ""))
+  ;; TODO don't make a vector, just have a second branch that returns "|  " for
+  ;; all but last.
+  ;; 
 
-    ;; vertical guides for ancestor levels
-    (dotimes (i (1- depth))
-      (setq prefix
-            (concat prefix
-                    (if (nth i is-last-list)
-                        "   "   ; no vertical line if last at that level
-                      "│  "))))
-
-    ;; current node connector
-    (setq prefix
-          (concat prefix
-                  (cond
-                   ((and is-node (car (last is-last-list))) "└─ ")
-                   (is-node "├─ ")
-                   ((not (car (last is-last-list))) "│ ")
-                   (t "  "))))
-
+  ;; vertical guides for ancestor levels
+  (let ((prefix ""))
+        (dotimes (i  depth)
+          (setq prefix
+                (concat prefix
+                        (cond
+                         ( (and is-node (aref is-last i) (= i (1- depth)) )  "└─ ")
+                          ((and is-node (= i (1- depth)))"├─ ")
+                          ((not (aref is-last i)) "│  ")
+                          (t "  ")))))
+    
     prefix))
 
 (defun org-roam-tree-backlinks (&optional node)
