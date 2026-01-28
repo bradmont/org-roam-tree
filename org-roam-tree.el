@@ -172,7 +172,7 @@ toggled by user or because of -default-visibility."
       (org-roam-tree--store-node-metadata start depth is-last-vec)
       (org-roam-tree--message-node-metadata start)
 
-      ;; Prefix the first line
+      ;; Prefix the node
       (save-excursion
         (goto-char start)
         (org-roam-tree--prefix-node-content is-last-vec depth))
@@ -195,7 +195,7 @@ toggled by user or because of -default-visibility."
                    (looking-at-p "^[││ ]*$"))
           (delete-line)
         ))
-    (insert (concat (org-roam-tree-make-prefix depth nil is-last-vec) " \n"))
+    (insert (concat (org-roam-tree-make-prefix depth nil is-last-vec) " \n"))))
 
 (defun org-roam-tree--insert-leaf (value children)
   (cl-typecase value
