@@ -332,7 +332,7 @@ and the branch is not last at any other level"
                          ( (and is-node (aref is-last i) (= i (1- depth)) )  "└─ ")
                           ((and is-node (= i (1- depth)))"├─ ")
                           ((not (aref is-last i)) "│  ")
-                          (t "  ")))))
+                          (t "   ")))))
     
     prefix))
 
