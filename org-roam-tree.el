@@ -94,31 +94,36 @@ toggled by user or because of -default-visibility."
 (defconst org-roam-tree--meta-depth 'org-roam-tree-depth)
 (defconst org-roam-tree--meta-is-last 'org-roam-tree-is-last)
 (defconst org-roam-tree--meta-prefixed 'org-roam-tree-prefixed)
+(defconst org-roam-tree--meta-path 'org-roam-tree-path)
 
-(defun org-roam-tree--store-node-metadata (pos depth is-last-vec)
-  "Store tree metadata at POS, the start of a node heading."
+(defun org-roam-tree--store-node-metadata (pos depth is-last-vec &optional path)
+  "Store tree metadata at POS, the start of a node heading.
+PATH is a vector representing the node's position in the tree."
   (add-text-properties
    pos (1+ pos)
    (list
     org-roam-tree--meta-depth depth
     org-roam-tree--meta-is-last (copy-sequence is-last-vec)
-    org-roam-tree--meta-prefixed nil)))
+    org-roam-tree--meta-prefixed nil
+    org-roam-tree--meta-path (when path (copy-sequence path)))))
 
 (defun org-roam-tree--get-node-metadata (pos)
   "Return node tree metadata plist stored at POS."
   (list
    :depth    (get-text-property pos org-roam-tree--meta-depth)
    :is-last  (get-text-property pos org-roam-tree--meta-is-last)
-   :prefixed (get-text-property pos org-roam-tree--meta-prefixed)))
+   :prefixed (get-text-property pos org-roam-tree--meta-prefixed)
+   :path     (get-text-property pos org-roam-tree--meta-path)))
 
 (defun org-roam-tree--message-node-metadata (pos)
   "Message node metadata at POS for debugging."
   (let ((meta (org-roam-tree--get-node-metadata pos)))
-    (message "[tree-node] pos=%d depth=%S is-last=%S prefixed=%S"
+    (message "[tree-node] pos=%d depth=%S is-last=%S prefixed=%S path=%S"
              pos
              (plist-get meta :depth)
              (plist-get meta :is-last)
-             (plist-get meta :prefixed))))
+             (plist-get meta :prefixed)
+             (plist-get meta :path))))
 
 
 
