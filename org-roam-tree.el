@@ -170,12 +170,12 @@ toggled by user or because of -default-visibility."
 
       ;; store tree metadata at node start
       (org-roam-tree--store-node-metadata start depth is-last-vec)
-      (org-roam-tree--message-node-metadata start)
+      ;(org-roam-tree--message-node-metadata start)
 
       ;; Prefix the node
       (save-excursion
         (goto-char start)
-        (org-roam-tree--prefix-node-content is-last-vec depth))
+        (org-roam-tree--prefix-node-content  depth))
 
       ;; Recurse into children *inside* the section
       (unless leafp
@@ -258,41 +258,58 @@ BODY is the code that renders the tree content."
 
 (advice-add 'magit-section-toggle :after #'org-roam-tree--track-toggle)
 
-
-(defun org-roam-tree--prefix-node-content (is-last-vec depth)
+(defun org-roam-tree--prefix-node-content (depth)
   "Insert tree prefixes for a node's rendered content.
 
-IS-LAST-VEC is a list of booleans indicating whether each depth
-level is the last sibling."
+Assumes point is at the beginning of the node. Uses metadata
+stored at point to determine depth and is-last-vec. Marks node
+as prefixed to avoid duplication."
+  (let* ((meta (org-roam-tree--get-node-metadata (point)))
+         (is-last-vec (plist-get meta :is-last))
+         (prefixed (plist-get meta :prefixed))
+         (start (point)))
+    ;; Already prefixed? skip
+    (unless prefixed
+      ;; Mark as prefixed
+      (add-text-properties start (1+ start)
+                           `(,org-roam-tree--meta-prefixed t))
+
       ;; First visual line
-      (insert (org-roam-tree-make-prefix
-               depth
-               t
-               is-last-vec))
+      (insert (org-roam-tree-make-prefix depth t is-last-vec))
 
-      ;; Subsequent visual lines
-      (while (and (not (eobp)) (line-move-visual 1 t))
+      ; move metadata to new beginning of line
+      (remove-text-properties
+       (point) (1+ (point))
+       (list org-roam-tree--meta-depth nil
+             org-roam-tree--meta-is-last nil
+             org-roam-tree--meta-prefixed nil))
+      (org-roam-tree--store-node-metadata start depth is-last-vec)
 
-        (unless (= (point) (point-max))
-          (beginning-of-visual-line)
+      ;; Subsequent visual lines, stop at next node or eobp
+      (while (and (not (eobp))
+                  (or (not (get-text-property (point) org-roam-tree--meta-depth))
+                      (= (point) start))
+                  (line-move-visual 1 t))
+        (beginning-of-visual-line)
+        (unless (string-match-p "^\\([ |]*│[ |]*\\)$"
+                                (buffer-substring-no-properties
+                                 (line-beginning-position)
+                                 (line-end-position)))
+          ;; don't re-prefix lines that are only prefixes...
+          ;; TODO bug - there is a line with an extra | after the section. Tried
+          ;; (if (magit-current-section) ...) instead of the regex,
+          ;; but that didn't prefix any lines
 
-          ;; remove stray newline between heading/body
-          (save-excursion
-            (backward-char)
-            (when (eq (char-after) ?\n)
-              (delete-char 1)))
+          (unless (eq (char-before) ?\n)
+            (insert "\n")) ;; convert visual wraps to hard newlines
 
           (insert
            (if (and (aref is-last-vec depth)
-                    (looking-at-p "^\\s-*$"))
+                    (looking-at-p "^[\\s|]*$"))
                ;; end-of-branch spacer
                (org-roam-tree-make-prefix (1- depth) nil nil)
-             (concat "\n" ;; convert visual line wraps to hard breaks; otherwise
-                     ;; inserting prefixs will re-wrap and mix things up
-                     (org-roam-tree-make-prefix
-                      depth
-                      nil
-                      is-last-vec)))))))
+             (org-roam-tree-make-prefix depth nil is-last-vec))))))))
+
 
 
 (defun org-roam-tree-make-prefix (depth is-node is-last)
