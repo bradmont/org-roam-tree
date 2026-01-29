@@ -188,14 +188,8 @@ toggled by user or because of -default-visibility."
                     child
                     (1+ depth)
                     is-last-vec)))))
-    ;;hack to fix wrap on section collapse
-    (save-excursion
-      (if (and (not (bobp))
-                   (forward-line -1)
-                   (looking-at-p "^[││ ]*$"))
-          (delete-line)
-        ))
-    (insert (concat (org-roam-tree-make-prefix depth nil is-last-vec) " \n"))))
+    
+    ))
 
 (defun org-roam-tree--insert-leaf (value children)
   (cl-typecase value
