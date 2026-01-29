@@ -271,7 +271,7 @@ as prefixed to avoid duplication."
       ;; First visual line
       (insert (org-roam-tree-make-prefix depth t is-last-vec))
 
-      ; move metadata to new beginning of line
+                                        ; move metadata to new beginning of line
       (remove-text-properties
        (point) (1+ (point))
        (list org-roam-tree--meta-depth nil
@@ -280,29 +280,33 @@ as prefixed to avoid duplication."
       (org-roam-tree--store-node-metadata start depth is-last-vec)
 
       ;; Subsequent visual lines, stop at next node or eobp
-      (while (and (not (eobp))
-                  (or (not (get-text-property (point) org-roam-tree--meta-depth))
-                      (= (point) start))
-                  (line-move-visual 1 t))
-        (beginning-of-visual-line)
-        (unless (string-match-p "^\\([ |]*│[ |]*\\)$"
-                                (buffer-substring-no-properties
-                                 (line-beginning-position)
-                                 (line-end-position)))
-          ;; don't re-prefix lines that are only prefixes...
-          ;; TODO bug - there is a line with an extra | after the section. Tried
-          ;; (if (magit-current-section) ...) instead of the regex,
-          ;; but that didn't prefix any lines
+      (let ((last-point -1))
+        (while (and (not (eobp))
+                    (or (not (get-text-property (point) org-roam-tree--meta-depth))
+                        (= (point) start))
+                    (or (= (point) start) (/= (point) last-point)))
+          (vertical-motion 1) ;; much faster than line-move-visual,
+                              ;; but requires manual point tracking
+          (beginning-of-visual-line)
+          (setq last-point (point))
+          (unless (string-match-p "^\\([ |]*│[ |]*\\)$"
+                                  (buffer-substring-no-properties
+                                   (line-beginning-position)
+                                   (line-end-position)))
+            ;; don't re-prefix lines that are only prefixes...
+            ;; TODO bug - there is a line with an extra | after the section. Tried
+            ;; (if (magit-current-section) ...) instead of the regex,
+            ;; but that didn't prefix any lines
 
-          (unless (eq (char-before) ?\n)
-            (insert "\n")) ;; convert visual wraps to hard newlines
+            (unless (eq (char-before) ?\n)
+              (insert "\n")) ;; convert visual wraps to hard newlines
 
-          (insert
-           (if (and (aref is-last-vec depth)
-                    (looking-at-p "^[\\s|]*$"))
-               ;; end-of-branch spacer
-               (org-roam-tree-make-prefix (1- depth) nil nil)
-             (org-roam-tree-make-prefix depth nil is-last-vec))))))))
+            (insert
+             (if (and (aref is-last-vec depth)
+                      (looking-at-p "^[\\s|]*$"))
+                 ;; end-of-branch spacer
+                 (org-roam-tree-make-prefix (1- depth) nil nil)
+               (org-roam-tree-make-prefix depth nil is-last-vec)))))))))
 
 
 
