@@ -245,6 +245,39 @@ PATH is a vector representing the node's position in the tree."
 
 
 
+(defun org-roam-tree--apply-folded-state ()
+  "Walk the Org-roam tree buffer and fold sections based on stored metadata."
+    (message "good")
+    (save-excursion
+      (goto-char (point-min))
+
+                  (vertical-motion 1)
+      (while (and (not (eobp))
+                  (not (eq (magit-current-section) magit-root-section)))
+
+        (when (get-text-property (point) org-roam-tree--meta-depth)
+          (let* ((meta (org-roam-tree--get-node-metadata (point)))
+                 (node-id (org-roam-node-id org-roam-buffer-current-node))
+                 (path (plist-get meta :path))
+                 (depth (plist-get meta :depth))
+                 (visible (org-roam-tree--node-visible-state node-id path)))
+            (if
+                (and
+                 (if (booleanp visible)
+                     visible
+                   (> depth visible))
+                 (not (magit-section-hidden (magit-current-section))))
+                     
+                (progn
+                  (message "invisible %s" path)
+                  (forward-char (* depth 3)) ; make sure we're in the section
+                (magit-section-hide (magit-current-section)))
+              (message "visible %s" path)
+              )))
+        (magit-section-forward)
+        )))
+
+
 (defmacro with-org-roam-tree-layout (&rest body)
   "Ensure proper visual layout for Org-roam tree rendering.
 
