@@ -341,7 +341,7 @@ as prefixed to avoid duplication."
        (list org-roam-tree--meta-depth nil
              org-roam-tree--meta-is-last nil
              org-roam-tree--meta-prefixed nil))
-             ; org-roam-tree--meta-path nil)) -- leave this one for easier lookup on fold
+                                        ; org-roam-tree--meta-path nil)) -- leave this one for easier lookup on fold
       (org-roam-tree--store-node-metadata start depth is-last-vec path)
 
       ;; Subsequent visual lines, stop at next node or eobp
@@ -365,8 +365,14 @@ as prefixed to avoid duplication."
 
             (unless (eq (char-before) ?\n)
               (insert "\n")) ;; convert visual wraps to hard newlines
-
-            (insert (org-roam-tree-make-prefix depth nil is-last-vec))))))))
+            
+            ;; insert the prefix, ensuring we're not adding empty prefixes to
+            ;; empty lines : stops occasional infinite loops.
+            (let ((prefix (org-roam-tree-make-prefix depth nil is-last-vec))
+                  (line-text (buffer-substring-no-properties (line-beginning-position) (line-end-position))))
+              (unless (cl-loop for c across (concat prefix line-text) always (eq c ?\s))
+                (insert prefix)))
+            ))))))
 
 
 
