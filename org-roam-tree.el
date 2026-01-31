@@ -47,25 +47,27 @@
   "Tree-style display extensions for Org-roam."
   :group 'org-roam)
 
-(defcustom org-roam-tree-default-visible t
-  "Whether to collapse all file-level branches after rendering the Org-roam tree."
-  :type 'boolean
+(defcustom org-roam-tree-default-visible 1
+  "Default fold below this level"
+  :type 'integer
   :group 'org-roam-tree)
 
 
 (defvar org-roam-tree-visible-state (make-hash-table :test 'equal)
-  "Stores fold states for files per node.")
+  "Stores fold states for nodes in multi-level trees.
+Keys are of the form (NODE-ID . PATH), where PATH is a vector of child names or node IDs.")
 
-(defun org-roam-tree--file-visible-state (node file)
-  "Return t if FILE under NODE should be folded, either because it has been
-toggled by user or because of -default-visibility."
-  (gethash (cons node file) org-roam-tree-visible-state org-roam-tree-default-visible)
-      )
+(defun org-roam-tree--node-visible-state (node-id path)
+  "Return t if the node at PATH under NODE-ID should be visible.
+Defaults to `org-roam-tree-default-visible' if no state stored."
+  (gethash (cons node-id path) org-roam-tree-visible-state
+           org-roam-tree-default-visible))
 
-(defun org-roam-tree--set-file-visible-state (node file hidden)
-  "Store fold state for FILE under NODE."
-  (puthash (cons node file) hidden org-roam-tree-visible-state))
-
+(defun org-roam-tree--set-node-visible-state (node path visible)
+  "Store visibility state for NODE at PATH."
+  (puthash (cons (org-roam-node-id node) path)
+           visible
+           org-roam-tree-visible-state))
 
 (cl-defun org-roam-tree-backlinks-section (node &key (section-heading "Backlinks Tree:"))
   "A tree-style backlinks section for NODE, grouping by source file."
@@ -105,7 +107,7 @@ PATH is a vector representing the node's position in the tree."
     org-roam-tree--meta-depth depth
     org-roam-tree--meta-is-last (copy-sequence is-last-vec)
     org-roam-tree--meta-prefixed nil
-    org-roam-tree--meta-path (when path (copy-sequence path)))))
+    org-roam-tree--meta-path path)))
 
 (defun org-roam-tree--get-node-metadata (pos)
   "Return node tree metadata plist stored at POS."
@@ -150,9 +152,9 @@ PATH is a vector representing the node's position in the tree."
                   (org-roam-tree--render-node
                    n
                    (1+ depth)
-                   is-last-vec)))))))
+                   is-last-vec))))))))
 
-(defun org-roam-tree--render-node (node depth is-last-vec)
+(defun org-roam-tree--render-node (node depth is-last-vec &optional parent-path)
   (let* ((value    (if (consp node) (car node) node))
          (children (when (consp node) (cdr node)))
          (leafp    (not (and children (listp children))))
@@ -167,14 +169,23 @@ PATH is a vector representing the node's position in the tree."
            ((org-roam-reflink-p value)
             'org-roam-tree-reflink)
            (t
-            'org-roam-tree-node))))
+            'org-roam-tree-node)))
+(node-id-or-name (cl-typecase value
+                           (org-roam-backlink
+                            (org-roam-node-id (org-roam-backlink-source-node value)))
+                           (org-roam-reflink
+                            (org-roam-node-id (org-roam-reflink-source-node value)))
+                           (string
+                            (file-name-nondirectory value))))
+(parent-path (or parent-path ""))
+       (path (concat parent-path "-" node-id-or-name)))
 
     (magit-insert-section section-id value
       ;; Insert this node’s content
       (org-roam-tree--insert-leaf value children)
 
       ;; store tree metadata at node start
-      (org-roam-tree--store-node-metadata start depth is-last-vec)
+      (org-roam-tree--store-node-metadata start depth is-last-vec path)
       ;(org-roam-tree--message-node-metadata start)
 
       ;; Prefix the node
@@ -182,6 +193,7 @@ PATH is a vector representing the node's position in the tree."
         (goto-char start)
         (org-roam-tree--prefix-node-content  depth))
 
+      
       ;; Recurse into children *inside* the section
       (unless leafp
         (let ((count (length children)))
@@ -192,9 +204,20 @@ PATH is a vector representing the node's position in the tree."
                    (org-roam-tree--render-node
                     child
                     (1+ depth)
-                    is-last-vec)))))
-    
-    ))
+                    is-last-vec
+                    path))))
+(save-excursion
+        (goto-char start)
+
+        (forward-char (min (* 3 depth) (- (point-max) (point))))
+(when (and (not (org-roam-tree--node-visible-state (org-roam-node-id org-roam-buffer-current-node) path))
+           (not (eq (magit-current-section) magit-root-section))
+           
+           (magit-section-hide (magit-current-section))))
+
+    ;(delete-char 1)
+    ;(insert-char ?§)
+))))
 
 (defun org-roam-tree--insert-leaf (value children)
   (cl-typecase value
@@ -272,6 +295,7 @@ as prefixed to avoid duplication."
   (let* ((meta (org-roam-tree--get-node-metadata (point)))
          (is-last-vec (plist-get meta :is-last))
          (prefixed (plist-get meta :prefixed))
+         (path (plist-get meta :path))
          (start (point)))
     ;; Already prefixed? skip
     (unless prefixed
