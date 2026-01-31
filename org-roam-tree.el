@@ -366,12 +366,7 @@ as prefixed to avoid duplication."
             (unless (eq (char-before) ?\n)
               (insert "\n")) ;; convert visual wraps to hard newlines
 
-            (insert
-             (if (and (aref is-last-vec depth)
-                      (looking-at-p "^[\\s|]*$"))
-                 ;; end-of-branch spacer
-                 (org-roam-tree-make-prefix (1- depth) nil nil)
-               (org-roam-tree-make-prefix depth nil is-last-vec)))))))))
+            (insert (org-roam-tree-make-prefix depth nil is-last-vec))))))))
 
 
 
