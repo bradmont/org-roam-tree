@@ -246,14 +246,20 @@ BODY is the code that renders the tree content."
          (set-window-margins (selected-window)
                              (car old-margin)
                              (cdr old-margin)))))))
-
 (defun org-roam-tree--track-toggle (&rest _args)
-  "Save fold state for the file section after toggling."
-  (let* ((section (magit-current-section))
-      (node org-roam-current-node)
-             (file (string-remove-prefix "org-roam-tree-file-" (oref section value)))
-             (hidden (oref section hidden)))  ;; true if folded
-        (org-roam-tree--set-file-visible-state (org-roam-node-id node) file (not hidden))))
+  "Save fold state for the section just toggled."
+  (message "toggle vis")
+  (when-let ((section (magit-current-section)))
+    (let*
+              ((node org-roam-buffer-current-node)
+              (start (oref section start))
+              (path (get-text-property start org-roam-tree--meta-path))
+              (hidden (not (org-roam-tree--node-visible-state (org-roam-node-id node) path))))
+
+    ;; Store state: visible = not hidden
+      (message (prin1-to-string section))
+    (message "set metadata for path %s" path)
+    (org-roam-tree--set-node-visible-state node path hidden))))
 
 (advice-add 'magit-section-toggle :after #'org-roam-tree--track-toggle)
 
@@ -282,7 +288,8 @@ as prefixed to avoid duplication."
        (list org-roam-tree--meta-depth nil
              org-roam-tree--meta-is-last nil
              org-roam-tree--meta-prefixed nil))
-      (org-roam-tree--store-node-metadata start depth is-last-vec)
+             ; org-roam-tree--meta-path nil)) -- leave this one for easier lookup on fold
+      (org-roam-tree--store-node-metadata start depth is-last-vec path)
 
       ;; Subsequent visual lines, stop at next node or eobp
       (let ((last-point -1))
