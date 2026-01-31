@@ -29,8 +29,7 @@ Eventually I hope to allow arbitrary depth trees, but for the moment it's limite
 
 using both =org-roam-tree-backlinks-section= and =org-roam-tree-reflinks-section= at the same time is *currently broken* (or generally, using more than one tree, if you implement your own)
 
-You can customize
-=org-roam-tree-default-visible= to enable/disable auto-collapse after building the buffer. 
+You can customize =org-roam-tree-default-visible= to enable/disable auto-collapse after building the buffer. This is an integer that sets the default fold level. 0 will show only top levels of the tree (filenames in the default -backlinks-section). 1 will expand the next level (titles of nodes in the default section). 2 will show also the next level (node previews in the default), and so on.
 
 * TODOs:
 
