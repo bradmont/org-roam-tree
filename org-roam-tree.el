@@ -48,7 +48,7 @@
   :group 'org-roam)
 
 (defcustom org-roam-tree-default-visible 1
-  "Default fold below this level"
+  "Default fold below this level. 0 is top-level groups folded."
   :type 'integer
   :group 'org-roam-tree)
 
@@ -126,6 +126,7 @@ PATH is a vector representing the node's position in the tree."
              (plist-get meta :is-last)
              (plist-get meta :prefixed)
              (plist-get meta :path))))
+
 
 
 
@@ -207,18 +208,8 @@ PATH is a vector representing the node's position in the tree."
                     (1+ depth)
                     is-last-vec
                     path))))
-(save-excursion
-        (goto-char start)
-
-        (forward-char (min (* 3 depth) (- (point-max) (point))))
-(when (and (not (org-roam-tree--node-visible-state (org-roam-node-id org-roam-buffer-current-node) path))
-           (not (eq (magit-current-section) magit-root-section))
-           
-           (magit-section-hide (magit-current-section))))
-
-    ;(delete-char 1)
-    ;(insert-char ?§)
-))))
+      (org-roam-tree--apply-folded-state)
+)))
 
 (defun org-roam-tree--insert-leaf (value children)
   (cl-typecase value
@@ -247,7 +238,6 @@ PATH is a vector representing the node's position in the tree."
 
 (defun org-roam-tree--apply-folded-state ()
   "Walk the Org-roam tree buffer and fold sections based on stored metadata."
-    (message "good")
     (save-excursion
       (goto-char (point-min))
 
