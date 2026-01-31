@@ -154,7 +154,10 @@ PATH is a vector representing the node's position in the tree."
                   (org-roam-tree--render-node
                    n
                    (1+ depth)
-                   is-last-vec))))))))
+                   is-last-vec)))))))
+(run-at-time 0.05 nil #'org-roam-tree--apply-folded-state)
+
+  )
 
 (defun org-roam-tree--render-node (node depth is-last-vec &optional parent-path)
   (let* ((value    (if (consp node) (car node) node))
@@ -208,7 +211,6 @@ PATH is a vector representing the node's position in the tree."
                     (1+ depth)
                     is-last-vec
                     path))))
-      (org-roam-tree--apply-folded-state)
 )))
 
 (defun org-roam-tree--insert-leaf (value children)
@@ -238,6 +240,9 @@ PATH is a vector representing the node's position in the tree."
 
 (defun org-roam-tree--apply-folded-state ()
   "Walk the Org-roam tree buffer and fold sections based on stored metadata."
+    (message "good")
+    (with-current-buffer (get-buffer "*org-roam*")
+    (magit-section-show-level-4-all)
     (save-excursion
       (goto-char (point-min))
 
@@ -265,7 +270,7 @@ PATH is a vector representing the node's position in the tree."
               (message "visible %s" path)
               )))
         (magit-section-forward)
-        )))
+        ))))
 
 
 (defmacro with-org-roam-tree-layout (&rest body)
