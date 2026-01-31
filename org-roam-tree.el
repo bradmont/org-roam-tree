@@ -139,6 +139,7 @@ PATH is a vector representing the node's position in the tree."
   (with-org-roam-tree-layout
    (when-let ((tree (funcall data-getter node)))
      (magit-insert-section section-id
+       (progn
        (magit-insert-heading section-heading)
 
        ;; tree is now just a list of top-level nodes
