@@ -30,7 +30,8 @@
 ;; 
 ;; Show only this section in the org-roam buffer:
 ;;(setq! org-roam-mode-sections '(org-roam-tree-backlinks-section))
-;;(setq! org-roam-mode-sections '(org-roam-tree-backlinks-section org-roam-tree-reflinks-section))
+;;(setq! org-roam-mode-sections '(org-roam-tree-reflinks-section))
+;;(setq! org-roam-mode-sections '(org-roam-tree-crosslinks-section))
 ;;
 ;; Add this section with the others in the org-roam buffer:
 ;;(add-to-list 'org-roam-mode-sections
@@ -69,19 +70,17 @@ Defaults to `org-roam-tree-default-visible' if no state stored."
            visible
            org-roam-tree-visible-state))
 
-(cl-defun org-roam-tree-backlinks-section (node &key (section-heading "Backlinks Tree:"))
+(cl-defun org-roam-tree-backlinks-section (node &key (section-heading "Backlinks:"))
   "A tree-style backlinks section for NODE, grouping by source file."
   (org-roam-tree-section node :section-heading section-heading :data-getter #'org-roam-tree-backlinks :section-id 'backlinks-tree))
 
-(cl-defun org-roam-tree-reflinks-section (node &key (section-heading "Reflinks Tree:"))
+(cl-defun org-roam-tree-reflinks-section (node &key (section-heading "Reflinks:"))
   "A tree-style backlinks section for NODE, grouping by source file."
   (org-roam-tree-section node :section-heading section-heading :data-getter #'org-roam-tree-reflinks :section-id 'reflinks-tree))
 
-(cl-defun org-roam-tree-reflinks-section (node &key (section-heading "Reflinks Tree:"))
+(cl-defun org-roam-tree-crosslinks-section (node &key (section-heading "Crosslinks:"))
   "A tree-style backlinks section for NODE, grouping by source file."
-  (org-roam-tree-section node :section-heading section-heading :data-getter #'org-roam-tree-reflinks))
-
-
+  (org-roam-tree-section node :section-heading section-heading :data-getter #'org-roam-tree-crosslinks :section-id 'crosslinks-tree))
 
 
 
@@ -241,13 +240,16 @@ PATH is a vector representing the node's position in the tree."
 (defun org-roam-tree--apply-folded-state ()
   "Walk the Org-roam tree buffer and fold sections based on stored metadata."
     (with-current-buffer (get-buffer "*org-roam*")
-    (magit-section-show-level-4-all)
+    ;(magit-section-show-level-4-all)
     (save-excursion
       (goto-char (point-min))
 
                   (vertical-motion 1)
       (while (and (not (eobp))
                   (not (eq (magit-current-section) magit-root-section)))
+
+        (when-let ((sec (magit-current-section)))
+          (magit-section-show-children sec))
 
         (when (get-text-property (point) org-roam-tree--meta-depth)
           (let* ((meta (org-roam-tree--get-node-metadata (point)))
@@ -443,6 +445,96 @@ NODE defaults to `org-roam-node-at-point` if nil."
          (push (cons file (nreverse reflinks)) result))
        table)
       result)))
+
+(defun org-roam-tree-crosslink-query (node-id)
+"Return a list of triples for nodes two hops from NODE-ID.
+
+Each element is of the form:
+
+  (CROSSLINK-ID BACKLINK-ID BACKLINK-OBJ)
+
+- CROSSLINK-ID: the ID of a node that is linked to by one of NODE-ID’s backlinks.
+- BACKLINK-ID: the ID of a node that links to NODE-ID.
+- BACKLINK-OBJ: a fully populated `org-roam-backlink` object representing
+  the backlink from BACKLINK-ID to NODE-ID.
+
+The list is ordered descending by how many of NODE-ID’s backlinks link
+to each CROSSLINK-ID (i.e., nodes linked to by multiple backlinks appear first)."
+  (let* ((db (org-roam-db))
+         ;; wrap node-id in quotes for SQLite storage
+         (quoted-id (format "\"%s\"" node-id))
+         ( query (format "SELECT DISTINCT
+       crosslinks.dest AS crosslink_id,
+       SUM(1) OVER (PARTITION BY crosslinks.dest) AS crosslink_count,
+       backlinks.source AS backlink_id,
+       backlinks.*
+       FROM links AS backlinks
+       JOIN links AS crosslinks
+         ON backlinks.source = crosslinks.source
+       WHERE backlinks.dest = '\"%s\"'
+         AND crosslinks.type = '\"id\"'
+         AND crosslinks.dest != '\"%s\"'
+       ORDER BY crosslink_count desc;"
+                         node-id node-id))
+         (results
+          (emacsql db
+                   query
+                   )))
+    ;; Map each row (dest count) to a cons
+    (mapcar
+     (lambda (row)
+       (let* ((crosslink-id (nth 0 row))
+              (backlink-id  (nth 2 row))
+              (point        (nth 3 row))
+              (source-id    (nth 4 row))
+              (dest-id      (nth 5 row))
+              (props        (nth 7 row))
+              (bo (org-roam-backlink-create
+                   :source-node (org-roam-node-from-id source-id)
+                   :target-node (org-roam-node-from-id dest-id)
+                   :point point
+                   :properties props)))
+         (list crosslink-id backlink-id bo)))
+     results)))
+(defun org-roam-tree-crosslinks (&optional node)
+  "Return crosslinks of NODE as a 3-level tree:
+((CROSSLINK-TITLE
+   (FILE . (BACKLINK BACKLINK ...))
+   (FILE . (BACKLINK BACKLINK ...)))
+ ...)"
+  (let* ((node (or node (org-roam-node-at-point)))
+         (crosslink-rows (org-roam-tree-crosslink-query (org-roam-node-id node)))
+         (table (make-hash-table :test 'equal)))
+    ;; Build a table: crosslink-id → (file → list of backlinks)
+    (dolist (row crosslink-rows)
+      (cl-destructuring-bind (crosslink-id backlink-id bo) row
+        (let* ((backlink-node (org-roam-node-from-id backlink-id))
+               (file (when backlink-node (org-roam-node-file backlink-node)))
+               (file-table (or (gethash crosslink-id table)
+                               (make-hash-table :test 'equal)))
+               (bls (gethash file file-table)))
+          (when file
+            (puthash file (cons bo bls) file-table)
+            (puthash crosslink-id file-table table)))))
+    ;; Convert hash tables to nested lists with file names and backlinks
+    (let (result)
+      (maphash
+       (lambda (crosslink-id file-table)
+         (let (files)
+           (maphash
+            (lambda (file bls)
+              (push (cons file (nreverse bls)) files))
+            file-table)
+           (let ((crosslink-node (org-roam-node-from-id crosslink-id)))
+             (push (cons (if crosslink-node
+                             (org-roam-node-title crosslink-node)
+                           crosslink-id) ;;; occasional nil errors unless I do this
+                         (nreverse files))
+                   result))))
+       table)
+      (nreverse result))))
+
+
 
 
 (provide 'org-roam-tree)
