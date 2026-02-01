@@ -240,7 +240,6 @@ PATH is a vector representing the node's position in the tree."
 
 (defun org-roam-tree--apply-folded-state ()
   "Walk the Org-roam tree buffer and fold sections based on stored metadata."
-    (message "good")
     (with-current-buffer (get-buffer "*org-roam*")
     (magit-section-show-level-4-all)
     (save-excursion
@@ -264,10 +263,8 @@ PATH is a vector representing the node's position in the tree."
                  (not (magit-section-hidden (magit-current-section))))
                      
                 (progn
-                  (message "invisible %s" path)
                   (forward-char (* depth 3)) ; make sure we're in the section
                 (magit-section-hide (magit-current-section)))
-              (message "visible %s" path)
               )))
         (magit-section-forward)
         ))))
@@ -300,7 +297,6 @@ BODY is the code that renders the tree content."
                              (cdr old-margin)))))))
 (defun org-roam-tree--track-toggle (&rest _args)
   "Save fold state for the section just toggled."
-  (message "toggle vis")
   (when-let ((section (magit-current-section)))
     (let*
               ((node org-roam-buffer-current-node)
@@ -309,8 +305,6 @@ BODY is the code that renders the tree content."
               (hidden (not (org-roam-tree--node-visible-state (org-roam-node-id node) path))))
 
     ;; Store state: visible = not hidden
-      (message (prin1-to-string section))
-    (message "set metadata for path %s" path)
     (org-roam-tree--set-node-visible-state node path hidden))))
 
 (advice-add 'magit-section-toggle :after #'org-roam-tree--track-toggle)
