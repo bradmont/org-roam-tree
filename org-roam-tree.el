@@ -70,6 +70,16 @@ Defaults to `org-roam-tree-default-visible' if no state stored."
            visible
            org-roam-tree-visible-state))
 
+;;;;;;;;;;;;;;;;;; BACKLINK BUFFER SECTIONS
+;; here are the included buffer sections. You can implement others following
+;; this pattern. The bulk of the work is done by the :data-getter function,
+;; which should return a list of cons cells,  of the format
+;; (SECTION . (CHILDREN ...)) where nodes are a string, filename, a backlink or
+;; a reflink. Some examples from the provided data getters:
+;;  ((FILE . (BACKLINK BACKLINK ...)) ...)
+;;  ((CROSSLINK-TITLE .
+;;   ((FILE . (BACKLINK BACKLINK ...))
+;;    (FILE . (BACKLINK BACKLINK ...)))) ...)
 (cl-defun org-roam-tree-backlinks-section (node &key (section-heading "Backlinks:"))
   "A tree-style backlinks section for NODE, grouping by source file."
   (org-roam-tree-section node :section-heading section-heading :data-getter #'org-roam-tree-backlinks :section-id 'backlinks-tree))
