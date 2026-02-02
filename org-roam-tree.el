@@ -37,9 +37,9 @@
 ;;(add-to-list 'org-roam-mode-sections
 ;;             #'org-roam-tree-backlinks-section t)
 ;;
-;; DO NOT DO THIS YET:
-;;(setq! org-roam-mode-sections '(org-roam-tree-reflinks-section org-roam-tree-backlinks-section))
-;;having two trees in the same roam buffer is currently broken.
+;; DO NOT DO THIS :
+;;(setq! org-roam-mode-sections '(org-roam-tree-crosslinks-section org-roam-tree-backlinks-section))
+;;having two trees in the same roam buffer is currently somewhat broken. Use at your own risk.
 ;;
 
 (require 'org-roam)
@@ -101,7 +101,7 @@ Defaults to `org-roam-tree-default-visible' if no state stored."
   "Store tree metadata at POS, the start of a node heading.
 PATH is a vector representing the node's position in the tree."
   (add-text-properties
-   pos (1+ pos)
+   pos (min (1+ pos) (point-max))
    (list
     org-roam-tree--meta-depth depth
     org-roam-tree--meta-is-last (copy-sequence is-last-vec)
@@ -138,6 +138,7 @@ PATH is a vector representing the node's position in the tree."
 
   (with-org-roam-tree-layout
    (when-let ((tree (funcall data-getter node)))
+     
      (magit-insert-section section-id
        (progn
        (magit-insert-heading section-heading)
@@ -155,7 +156,6 @@ PATH is a vector representing the node's position in the tree."
                    (1+ depth)
                    is-last-vec)))))))
 (run-at-time 0.05 nil #'org-roam-tree--apply-folded-state)
-
   )
 
 (defun org-roam-tree--render-node (node depth is-last-vec &optional parent-path)
@@ -535,7 +535,77 @@ to each CROSSLINK-ID (i.e., nodes linked to by multiple backlinks appear first).
       (nreverse result))))
 
 
+
 
+;;;;;;;;;;;;;;;;;;;; MENU BUTTON
+;; Menu to quickly change the roam buffer sections
+
+(defmacro org-roam-tree--make-button (label fn &rest props)
+  "Create a header-line button with LABEL that runs FN after ensuring window focus."
+  `(propertize ,label
+               'mouse-face 'highlight
+               'help-echo ,(plist-get props :help)
+               'local-map (let ((m (make-sparse-keymap)))
+                            (define-key m [header-line down-mouse-1]
+                              (lambda (event)
+                                (interactive "e")
+                                (org-roam-tree--helper-ensure-buffer-focus event ,fn)))
+                            m)))
+
+(setq org-roam-tree--header-buttons
+  (list
+   (org-roam-tree--make-button "" #'org-roam-tree--header-menu
+                          ;:help "Menu")
+   )))
+
+(defun org-roam-tree--helper-ensure-buffer-focus (event fn &rest args)
+  "Ensure the clicked window is selected, then call FN with ARGS."
+  (interactive "e")
+  (let ((win (posn-window (event-start event))))
+    (select-window win))
+  (apply fn args))
+
+(setq org-roam-tree--roam-sections-cookie org-roam-mode-sections)
+
+(defun org-roam-tree--header-menu ()
+  (popup-menu
+   '("menu"
+     ["Default section" (org-roam-tree--change-sections org-roam-tree--roam-sections-cookie)]
+     ["Backlinks tree" (org-roam-tree--change-sections '(org-roam-tree-backlinks-section))]
+     ["Reflinks tree" (org-roam-tree--change-sections '(org-roam-tree-reflinks-section))]
+     ["Crosslinks tree" (org-roam-tree--change-sections '(org-roam-tree-crosslinks-section))])))
+
+(defun org-roam-tree--change-sections (sections)
+  "Change the sections displayed in org-roam buffer to sections and
+reload."
+  (message "Changing roam buffer sections...")
+  (setq org-roam-mode-sections sections)
+  (org-roam-buffer-refresh))
+
+(defun org-roam-tree--add-header-buttons ()
+  (let* ((title (propertize
+                 (org-roam-node-title org-roam-buffer-current-node)
+                 'face 'bold))
+         (btn-list org-roam-tree--header-buttons)
+         (btn-width ;; Compute total width for right alignment
+          (apply #'+
+                 (mapcar (lambda (btn)
+                           (+ 2 (string-width btn))) ; +1 for space
+                         btn-list))))
+    (setq header-line-format
+          `(
+            ,title
+            ;; Flexible space before the buttons
+            (:eval (propertize
+                    " "
+                    'display '((space :align-to (- right ,btn-width)))))
+
+            ;; Insert each button followed by one space
+            ,@(cl-mapcan (lambda (btn) (list btn " "))
+                         btn-list)))))
+
+(add-hook 'org-roam-buffer-postrender-functions
+          #'org-roam-tree--add-header-buttons)
 
 (provide 'org-roam-tree)
 ;;; org-roam-tree.el ends here
