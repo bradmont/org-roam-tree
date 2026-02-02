@@ -155,8 +155,7 @@ PATH is a vector representing the node's position in the tree."
                    n
                    (1+ depth)
                    is-last-vec)))))))
-(run-at-time 0.05 nil #'org-roam-tree--apply-folded-state)
-  )
+(run-at-time 0.05 nil #'org-roam-tree--apply-folded-state))
 
 (defun org-roam-tree--render-node (node depth is-last-vec &optional parent-path)
   (let* ((value    (if (consp node) (car node) node))
@@ -350,10 +349,11 @@ as prefixed to avoid duplication."
                               ;; but requires manual point tracking
           (beginning-of-visual-line)
           (setq last-point (point))
-          (unless (string-match-p "^\\([ |]*│[ |]*\\)$"
+          (unless (string-match-p "^[│  └─|├]*[│└─|├][│  └─|├]*$"
                                   (buffer-substring-no-properties
                                    (line-beginning-position)
                                    (line-end-position)))
+            
             ;; don't re-prefix lines that are only prefixes...
             ;; TODO bug - there is a line with an extra | after the section. Tried
             ;; (if (magit-current-section) ...) instead of the regex,
