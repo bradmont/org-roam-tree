@@ -2,37 +2,36 @@
 
 * Description
 
-Creates a tree-like backlinks list you can add to your org-roam buffer, which organizes backlinks by their org file source.
+Creates a tree-like backlinks list you can use in your org-roam buffer. There are many ways this can be used, but the defaults organize backlinks/reflinks by their org file source, and by "crosslinks" --- other nodes that a backlinking node also links to
 
-You can reuse the display logic to define different groupings, for example, to follow the org tree from the files containing backlinks, or maybe arbitrarily grouped results, which could be helpful with org-roam-ql. As it stands, you can quickly make new display sections. Look at =org-roam-tree-backlinks-section= for the pattern, and =org-roam-tree-backlinks= for an example of how to generate the data structure you need.
+You can reuse the display logic to define different groupings, how ever you can imagine. As it stands, you can quickly make new display sections simply by providing a list of titles and backlinks. Look at =org-roam-tree-backlinks-section= for the pattern, and =org-roam-tree-backlinks= for an example of how to generate the data structure you need.
 
-Eventually I hope to allow arbitrary depth trees, but for the moment it's limited to a depth of 2, files and nodes in the provided org-roam-mode section.
+Arbitrary tree depths are now supported, but they can get pretty heavy to redisplay, so I do not recommend wandering around a large org-roam graph with one of these (like =org-roam-tree-crosslinks-section= activated. For this reason, the package now adds a small hamburger menu to the header bar of your =*org-roam*= buffer, that lets you quickly change your displayed =org-roam-mode-sections=.
 
 
 [[file:preview.png]]
 
-*THIS HAS ROUGH EDGES*, it's functional, but a work in progress.
+*There are still a few rough edges. The package is functional, but a work in progress.
+
 * Usage
+
+Enable by loading org-roam-tree.el. This will give you the hamburger menu to quickly activate the backlink trees.
+
+I like to have the backlinks tree as the default view. You can do that like this:
 
 #+begin_src elisp
 
-;; Enable by adding org-roam-tree-backlinks-section to org-roam-mode-sections
-;; 
-;; Show only this section in the org-roam buffer:
 (setq! org-roam-mode-sections '(org-roam-tree-backlinks-section))
+;; or for reflinks,
 (setq! org-roam-mode-sections '(org-roam-tree-reflinks-section))
-;;
-;; Add this section with the others in the org-roam buffer:
-(add-to-list 'org-roam-mode-sections
-             #'org-roam-tree-backlinks-section t)
 #+end_src
 
-using both =org-roam-tree-backlinks-section= and =org-roam-tree-reflinks-section= at the same time is *currently broken* (or generally, using more than one tree, if you implement your own)
+Again, I don't recommend having -crosslinks-section as your default view. The simpler views are quite performant, but crosslinks can make emacs hang while rendering, especially on a large graph or on a throttled processor like a laptop in power saving mode.
+
+using both =org-roam-tree-backlinks-section= and =org-roam-tree-reflinks-section= at the same time is *buggy and not recommended* (or generally, using more than one tree, if you implement your own)
 
 You can customize =org-roam-tree-default-visible= to enable/disable auto-collapse after building the buffer. This is an integer that sets the default fold level. 0 will show only top levels of the tree (filenames in the default -backlinks-section). 1 will expand the next level (titles of nodes in the default section). 2 will show also the next level (node previews in the default), and so on.
 
 * TODOs:
-
-** [ ] Adjust tree insertion logic to allow arbitrary depth trees
 ** [ ] persist node fold states across emacs sessions
-** [ ] Fix displaying multiple trees in same org-roam buffer
+** [?] Fix displaying multiple trees in same org-roam buffer
