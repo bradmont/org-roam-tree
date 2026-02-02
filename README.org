@@ -8,8 +8,11 @@ You can reuse the display logic to define different groupings, how ever you can 
 
 Arbitrary tree depths are now supported, but they can get pretty heavy to redisplay, so I do not recommend wandering around a large org-roam graph with one of these (like =org-roam-tree-crosslinks-section= activated. For this reason, the package now adds a small hamburger menu to the header bar of your =*org-roam*= buffer, that lets you quickly change your displayed =org-roam-mode-sections=.
 
-
+A backlinks tree, grouped by file containing nodes:
 [[file:preview.png]]
+
+A crosslinks tree, grouped by crosslinks then by file containing nodes:
+[[file:preview_crosslinks.png]]
 
 *There are still a few rough edges. The package is functional, but a work in progress.
 
