@@ -85,11 +85,15 @@ Defaults to `org-roam-tree-default-visible' if no state stored."
   (org-roam-tree-section node :section-heading section-heading :data-getter #'org-roam-tree-backlinks :section-id 'backlinks-tree))
 
 (cl-defun org-roam-tree-reflinks-section (node &key (section-heading "Reflinks:"))
-  "A tree-style backlinks section for NODE, grouping by source file."
+  "A tree-style reflinks section for NODE, grouping by source file."
   (org-roam-tree-section node :section-heading section-heading :data-getter #'org-roam-tree-reflinks :section-id 'reflinks-tree))
 
+(cl-defun org-roam-tree-unlinked-references-section (node &key (section-heading "Unlinked References:"))
+  "A tree-style unlinked references section for NODE, grouping by source file."
+  (org-roam-tree-section node :section-heading section-heading :data-getter #'org-roam-tree-unlinked-references :section-id 'unlinked-references-tree))
+
 (cl-defun org-roam-tree-crosslinks-section (node &key (section-heading "Crosslinks:"))
-  "A tree-style backlinks section for NODE, grouping by source file."
+  "A tree-style crosslinks section for NODE, grouping by source file."
   (org-roam-tree-section node :section-heading section-heading :data-getter #'org-roam-tree-crosslinks :section-id 'crosslinks-tree))
 
 
@@ -181,6 +185,8 @@ PATH is a vector representing the node's position in the tree."
             'org-roam-tree-backlink)
            ((org-roam-reflink-p value)
             'org-roam-tree-reflink)
+           ((org-roam-tree-simlink-p value)
+            'org-roam-tree-simlink)
            (t
             'org-roam-tree-node)))
 (node-id-or-name (cl-typecase value
@@ -188,6 +194,8 @@ PATH is a vector representing the node's position in the tree."
                             (org-roam-node-id (org-roam-backlink-source-node value)))
                            (org-roam-reflink
                             (org-roam-node-id (org-roam-reflink-source-node value)))
+                           (org-roam-tree-simlink
+                            (org-roam-tree-simlink-title value))
                            (string
                             (file-name-nondirectory value))))
 (parent-path (or parent-path ""))
@@ -240,6 +248,8 @@ PATH is a vector representing the node's position in the tree."
 
         ))
      )
+    (org-roam-tree-simlink
+       (org-roam-tree-simlink-insert-section value))
     (string
      (magit-insert-heading (format "%s (%d)" (file-name-nondirectory value) (length children))))))
 
@@ -456,6 +466,111 @@ NODE defaults to `org-roam-node-at-point` if nil."
        table)
       result)))
 
+
+(defun org-roam-tree-unlinked-references (&optional node)
+
+  "Return unlinked references of NODE as a tree using `org-roam-tree-simlink` structs.
+
+Tree format:
+((FILENAME
+   (SIMLINK SIMLINK ...))
+ ...)
+
+NODE defaults to `(org-roam-node-at-point)` if nil."
+  (let* ((node (or node (org-roam-node-at-point))))
+    (when (and node
+               (executable-find "rg")
+               (org-roam-node-title node)
+               (not (string-match "PCRE2 is not available"
+                                  (shell-command-to-string "rg --pcre2-version"))))
+      (let* ((titles (cons (org-roam-node-title node)
+                           (org-roam-node-aliases node)))
+             (temp-file (make-temp-file "org-roam-rg-pattern-"))
+             (rg-command (org-roam-unlinked-references--rg-command titles temp-file))
+             (file-tree (make-hash-table :test 'equal))) ;; ensure hash table
+        (unwind-protect
+            (let* ((results (split-string (shell-command-to-string rg-command) "\n"))
+                   f row col match body start)
+              ;; Build a hash table of filename → list of formatted matches
+              (dolist (line results)
+                (save-match-data
+                  (when (string-match org-roam-unlinked-references-result-re line)
+                    (setq f (match-string 1 line)
+                          row (string-to-number (match-string 2 line))
+                          col (string-to-number (match-string 3 line))
+                          match (match-string 4 line)
+                          body (propertize (org-roam-fontify-like-in-org-mode (org-roam-unlinked-references-preview-line f row)))
+                          start (string-match (regexp-quote match) body))
+                    (when (and match
+                               (not (file-equal-p (org-roam-node-file node) f))
+                               (member (downcase match) (mapcar #'downcase titles)))
+                      (when start
+                        (put-text-property start (+ start (length match))
+                                           'face 'org-link-file body))
+                      (setq simlink (make-org-roam-tree-simlink
+                                     :title (file-name-nondirectory f)
+                                 :file f
+                                 :row row
+                                 :col col
+                                 :body body))
+
+                      (let* ((matches (gethash f file-tree)))
+                        (puthash f (cons simlink matches) file-tree))
+                      ))))
+              ;; Convert hash table to list of lists, reversing matches for correct order
+              (let (result)
+                (maphash
+                 (lambda (filename matches)
+                   (push (cons filename (nreverse matches)) result))
+                 file-tree)
+                (nreverse result)))
+          ;; Clean up temp file
+          (delete-file temp-file))))))
+
+ 
+;;;;;;;; for simulating "links" that we construct in non-roam ways
+;; Can be reused for a nice looking voew for your own created
+;; "links"
+(cl-defstruct org-roam-tree-simlink
+  file      ;; full path to file
+  title     ;; usually filename or a short description
+  row       ;; line number in file
+  col       ;; column number in file
+  point     ;; optional character position; if nil, row/col is used - TODO
+  body      ;; the text content to render (string, can have text properties)
+  properties) ;; any extra metadata as a plist - TODO
+
+
+(cl-defun org-roam-tree-simlink-insert-section (simlink)
+  "Insert a section for SIMLINK in the org-roam tree buffer.
+
+This mirrors `org-roam-node-insert-section`, but works for simulated links."
+  (let ((title (org-roam-tree-simlink-title simlink))
+        (file  (org-roam-tree-simlink-file simlink))
+        (row   (org-roam-tree-simlink-row simlink))
+        (col   (org-roam-tree-simlink-col simlink))
+        (point (org-roam-tree-simlink-point simlink))
+        (body  (org-roam-tree-simlink-body simlink))
+        (props (org-roam-tree-simlink-properties simlink)))
+    ;; Parent section for the file/title
+    (magit-insert-section section (org-roam-node-section)
+      (insert (propertize title 'font-lock-face 'org-roam-title)
+              (when (and row col) (format " (%d:%d)" row col))))
+    ;; Child section for the content
+    (magit-insert-heading)
+    (magit-insert-section section (org-roam-grep-section)
+      (insert body "\n")
+      (oset section file file)
+      ;(when point (oset section point point))
+      (oset section row row)
+      (oset section col col)
+      ;(oset section properties props)
+      (insert ?\n))))
+
+
+
+
+
 (defun org-roam-tree-crosslink-query (node-id)
 "Return a list of triples for nodes two hops from NODE-ID.
 
@@ -583,6 +698,7 @@ to each CROSSLINK-ID (i.e., nodes linked to by multiple backlinks appear first).
      ["Default section" (org-roam-tree--change-sections org-roam-tree--roam-sections-cookie)]
      ["Backlinks tree" (org-roam-tree--change-sections '(org-roam-tree-backlinks-section))]
      ["Reflinks tree" (org-roam-tree--change-sections '(org-roam-tree-reflinks-section))]
+     ["Unlinked References tree" (org-roam-tree--change-sections '(org-roam-tree-unlinked-references-section))]
      ["Crosslinks tree" (org-roam-tree--change-sections '(org-roam-tree-crosslinks-section))])))
 
 (defun org-roam-tree--change-sections (sections)
