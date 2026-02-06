@@ -57,6 +57,7 @@
 (defvar org-roam-tree-visible-state (make-hash-table :test 'equal)
   "Stores fold states for nodes in multi-level trees.
 Keys are of the form (NODE-ID . PATH), where PATH is a vector of child names or node IDs.")
+(defvar-local org-roam-tree--node-count nil)
 
 (defun org-roam-tree--node-visible-state (node-id path)
   "Return t if the node at PATH under NODE-ID should be visible.
@@ -110,6 +111,7 @@ Defaults to `org-roam-tree-default-visible' if no state stored."
 (defconst org-roam-tree--meta-is-last 'org-roam-tree-is-last)
 (defconst org-roam-tree--meta-prefixed 'org-roam-tree-prefixed)
 (defconst org-roam-tree--meta-path 'org-roam-tree-path)
+(defconst org-roam-tree--meta-is-prefix-string 'org-roam-tree-prefix)
 
 (defun org-roam-tree--store-node-metadata (pos depth is-last-vec &optional path)
   "Store tree metadata at POS, the start of a node heading.
@@ -119,7 +121,7 @@ PATH is a vector representing the node's position in the tree."
    (list
     org-roam-tree--meta-depth depth
     org-roam-tree--meta-is-last (copy-sequence is-last-vec)
-    org-roam-tree--meta-prefixed nil
+    ;org-roam-tree--meta-prefixed nil
     org-roam-tree--meta-path path)))
 
 (defun org-roam-tree--get-node-metadata (pos)
@@ -150,6 +152,7 @@ PATH is a vector representing the node's position in the tree."
           (data-getter #'org-roam-tree-backlinks)
           (section-id 'org-roam-tree-section))
 
+  (setq org-roam-tree--node-count 0)
   (with-org-roam-tree-layout
    (when-let ((tree (funcall data-getter node)))
      
@@ -209,10 +212,11 @@ PATH is a vector representing the node's position in the tree."
       (org-roam-tree--store-node-metadata start depth is-last-vec path)
       ;(org-roam-tree--message-node-metadata start)
 
-      ;; Prefix the node
-      (save-excursion
-        (goto-char start)
-        (org-roam-tree--prefix-node-content  depth))
+      (when (< org-roam-tree--node-count (window-body-height))
+        ;;Prefix the immediately visible nodes. Do the rest lazily.
+        (save-excursion
+          (goto-char start)
+          (setq org-roam-tree--node-count (+ org-roam-tree--node-count (org-roam-tree--prefix-node-content)))))
 
       
       ;; Recurse into children *inside* the section
@@ -226,8 +230,7 @@ PATH is a vector representing the node's position in the tree."
                     child
                     (1+ depth)
                     is-last-vec
-                    path))))
-)))
+                    path)))))))
 
 (defun org-roam-tree--insert-leaf (value children)
   (cl-typecase value
@@ -330,6 +333,66 @@ BODY is the code that renders the tree content."
 
 (advice-add 'magit-section-toggle :after #'org-roam-tree--track-toggle)
 
+(defun org-roam-tree--jit-prefix-range (start end)
+  "Prefix all un-prefixed nodes between START and END.
+
+Snaps START to the nearest node boundary, then walks visual lines
+until END, calling `org-roam-tree--prefix-node-content' at each
+node start whose :prefixed metadata is missing."
+  (let ((needed-prefixing nil))
+  (with-org-roam-tree-layout
+      ;; ---- snap START to a node boundary ----
+      (goto-char start)
+      (beginning-of-line)
+      (while (and (> (point) (point-min))
+                  (not (get-text-property (point) org-roam-tree--meta-depth)))
+        (forward-line -1)
+        (beginning-of-line))
+
+      ;; ---- walk until END ----
+      (let ((limit end)
+            (last-point -1))
+        (while (and (not (eobp))
+                    (< (point) limit)
+                    (/= (point) last-point))
+          (setq last-point (point))
+
+          ;; Node start?
+          (when (and (get-text-property (point) org-roam-tree--meta-depth)
+                     (not (get-text-property (point) org-roam-tree--meta-prefixed)))
+            (save-excursion
+              (org-roam-tree--prefix-node-content)
+              (setq needed-prefixing t)
+              ))
+
+          ;; move by visual lines
+          (forward-line 1)
+          (beginning-of-line))))
+  needed-prefixing))
+
+(defun org-roam-tree--active-p ()
+  "Return non-nil if an org-roam-tree section is active."
+  (and (boundp 'org-roam-mode-sections)
+       (cl-some (lambda (s)
+                  (and (symbolp s)
+                       (string-prefix-p "org-roam-tree"
+                                        (symbol-name s))))
+                org-roam-mode-sections)))
+
+(defun org-roam-tree--jit-prefix (start end)
+  (when (and (derived-mode-p 'org-roam-mode)
+             (org-roam-tree--active-p))
+    (if (org-roam-tree--jit-prefix-range start end) ;; t if made changes
+        (let ((range-end (min (+ start (* 6 (- end start))) (point-max))))
+          ;; batch ahead for responsiveness
+          (org-roam-tree--jit-prefix-range end range-end))
+      )))
+
+(add-hook 'org-roam-mode-hook
+          (lambda ()
+            (jit-lock-register #'org-roam-tree--jit-prefix)))
+
+
 (defun org-roam-tree--prefix-node-content ()
   "Insert tree prefixes for a node's rendered content.
 
@@ -341,8 +404,9 @@ as prefixed to avoid duplication."
          (prefixed (plist-get meta :prefixed))
          (path (plist-get meta :path))
          (depth (plist-get meta :depth))
-         (start (point)))
-    ;; Already prefixed? skip
+         (start (point))
+         (lines 1))
+    ;; ALREADY prefixed? skip
     (unless prefixed
 
       ;; First visual line
@@ -383,19 +447,24 @@ as prefixed to avoid duplication."
             ;; but that didn't prefix any lines
 
             (unless (eq (char-before) ?\n)
-              (insert "\n")) ;; convert visual wraps to hard newlines
+              (insert "\n")
+              (setq lines (1+ lines))
+              ) ;; convert visual wraps to hard newlines
             
             ;; insert the prefix, ensuring we're not adding empty prefixes to
             ;; empty lines : stops occasional infinite loops.
+            (unless
+                      (get-text-property (line-beginning-position) org-roam-tree--meta-is-prefix-string)
             (let ((prefix (org-roam-tree-make-prefix depth nil is-last-vec))
                   (line-text (buffer-substring-no-properties (line-beginning-position) (line-end-position))))
               (unless (cl-loop for c across (concat prefix line-text) always (eq c ?\s))
-                (insert prefix)))
+                (insert prefix))))
             )
 
           (vertical-motion 1) ;; much faster than line-move-visual,
                               ;; but requires manual point tracking
-          )))))
+          ))
+      lines)))
 
 
 
@@ -423,6 +492,7 @@ and the branch is not last at any other level"
                           ((not (aref is-last i)) "│  ")
                           (t "   ")))))
     
+        (setq prefix (propertize prefix org-roam-tree--meta-is-prefix-string t))
     prefix))
 
 (defun org-roam-tree-backlinks (&optional node)
