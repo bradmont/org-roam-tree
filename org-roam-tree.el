@@ -330,7 +330,7 @@ BODY is the code that renders the tree content."
 
 (advice-add 'magit-section-toggle :after #'org-roam-tree--track-toggle)
 
-(defun org-roam-tree--prefix-node-content (depth)
+(defun org-roam-tree--prefix-node-content ()
   "Insert tree prefixes for a node's rendered content.
 
 Assumes point is at the beginning of the node. Uses metadata
@@ -340,12 +340,10 @@ as prefixed to avoid duplication."
          (is-last-vec (plist-get meta :is-last))
          (prefixed (plist-get meta :prefixed))
          (path (plist-get meta :path))
+         (depth (plist-get meta :depth))
          (start (point)))
     ;; Already prefixed? skip
     (unless prefixed
-      ;; Mark as prefixed
-      (add-text-properties start (1+ start)
-                           `(,org-roam-tree--meta-prefixed t))
 
       ;; First visual line
       (insert (org-roam-tree-make-prefix depth t is-last-vec))
@@ -359,14 +357,19 @@ as prefixed to avoid duplication."
                                         ; org-roam-tree--meta-path nil)) -- leave this one for easier lookup on fold
       (org-roam-tree--store-node-metadata start depth is-last-vec path)
 
+      ;; Mark as prefixed
+      (add-text-properties start (1+ start)
+                           `(,org-roam-tree--meta-prefixed t))
+
       ;; Subsequent visual lines, stop at next node or eobp
       (let ((last-point -1))
+
+          (vertical-motion 1) ;; much faster than line-move-visual,
+                              ;; but requires manual point tracking
         (while (and (not (eobp))
                     (or (not (get-text-property (point) org-roam-tree--meta-depth))
                         (= (point) start))
                     (or (= (point) start) (/= (point) last-point)))
-          (vertical-motion 1) ;; much faster than line-move-visual,
-                              ;; but requires manual point tracking
           (beginning-of-visual-line)
           (setq last-point (point))
           (unless (string-match-p "^[│  └─|├]*[│└─|├][│  └─|├]*$"
@@ -388,7 +391,11 @@ as prefixed to avoid duplication."
                   (line-text (buffer-substring-no-properties (line-beginning-position) (line-end-position))))
               (unless (cl-loop for c across (concat prefix line-text) always (eq c ?\s))
                 (insert prefix)))
-            ))))))
+            )
+
+          (vertical-motion 1) ;; much faster than line-move-visual,
+                              ;; but requires manual point tracking
+          )))))
 
 
 
