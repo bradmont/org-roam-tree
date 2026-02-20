@@ -590,7 +590,11 @@ NODE defaults to `(org-roam-node-at-point)` if nil."
                  (lambda (filename matches)
                    (push (cons filename (nreverse matches)) result))
                  file-tree)
-                (nreverse result)))
+        (sort result
+              (lambda (a b)
+                (> (length (cdr a))
+                   (length (cdr b)))))
+                ))
           ;; Clean up temp file
           (delete-file temp-file))))))
 
@@ -724,7 +728,10 @@ to each CROSSLINK-ID (i.e., nodes linked to by multiple backlinks appear first).
                          (nreverse files))
                    result))))
        table)
-      (nreverse result))))
+(sort result
+              (lambda (a b)
+                (> (length (cdr a))
+                   (length (cdr b))))))))
 
 
 
