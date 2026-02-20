@@ -57,7 +57,7 @@
 (defvar org-roam-tree-visible-state (make-hash-table :test 'equal)
   "Stores fold states for nodes in multi-level trees.
 Keys are of the form (NODE-ID . PATH), where PATH is a vector of child names or node IDs.")
-(defvar-local org-roam-tree--node-count nil)
+(defvar-local org-roam-tree--prefixed-lines-count nil)
 
 (defun org-roam-tree--node-visible-state (node-id path)
   "Return t if the node at PATH under NODE-ID should be visible.
@@ -152,7 +152,7 @@ PATH is a vector representing the node's position in the tree."
           (data-getter #'org-roam-tree-backlinks)
           (section-id 'org-roam-tree-section))
 
-  (setq org-roam-tree--node-count 0)
+  (setq org-roam-tree--prefixed-lines-count 0)
   (with-org-roam-tree-layout
    (when-let ((tree (funcall data-getter node)))
      
@@ -212,11 +212,11 @@ PATH is a vector representing the node's position in the tree."
       (org-roam-tree--store-node-metadata start depth is-last-vec path)
       ;(org-roam-tree--message-node-metadata start)
 
-      (when (< org-roam-tree--node-count (window-body-height))
+      (when (< org-roam-tree--prefixed-lines-count (window-body-height))
         ;;Prefix the immediately visible nodes. Do the rest lazily.
         (save-excursion
           (goto-char start)
-          (setq org-roam-tree--node-count (+ org-roam-tree--node-count (org-roam-tree--prefix-node-content)))))
+          (setq org-roam-tree--prefixed-lines-count (+ org-roam-tree--prefixed-lines-count (org-roam-tree--prefix-node-content)))))
 
       
       ;; Recurse into children *inside* the section
@@ -319,6 +319,7 @@ BODY is the code that renders the tree content."
          (set-window-margins (selected-window)
                              (car old-margin)
                              (cdr old-margin)))))))
+
 (defun org-roam-tree--track-toggle (&rest _args)
   "Save fold state for the section just toggled."
   (when-let ((section (magit-current-section)))
@@ -332,6 +333,7 @@ BODY is the code that renders the tree content."
     (org-roam-tree--set-node-visible-state node path hidden))))
 
 (advice-add 'magit-section-toggle :after #'org-roam-tree--track-toggle)
+
 
 (defun org-roam-tree--jit-prefix-range (start end)
   "Prefix all un-prefixed nodes between START and END.
