@@ -428,41 +428,31 @@ as prefixed to avoid duplication."
       ;; Subsequent visual lines, stop at next node or eobp
       (let ((last-point -1))
 
-          (vertical-motion 1) ;; much faster than line-move-visual,
-                              ;; but requires manual point tracking
+        (vertical-motion 1) ;; much faster than line-move-visual,
+        ;; but requires manual point tracking
         (while (and (not (eobp))
                     (or (not (get-text-property (point) org-roam-tree--meta-depth))
                         (= (point) start))
                     (or (= (point) start) (/= (point) last-point)))
           (beginning-of-visual-line)
           (setq last-point (point))
-          (unless (string-match-p "^[│  └─|├]*[│└─|├][│  └─|├]*$"
-                                  (buffer-substring-no-properties
-                                   (line-beginning-position)
-                                   (line-end-position)))
-            
-            ;; don't re-prefix lines that are only prefixes...
-            ;; TODO bug - there is a line with an extra | after the section. Tried
-            ;; (if (magit-current-section) ...) instead of the regex,
-            ;; but that didn't prefix any lines
-
-            (unless (eq (char-before) ?\n)
-              (insert "\n")
-              (setq lines (1+ lines))
-              ) ;; convert visual wraps to hard newlines
-            
-            ;; insert the prefix, ensuring we're not adding empty prefixes to
-            ;; empty lines : stops occasional infinite loops.
-            (unless
-                      (get-text-property (line-beginning-position) org-roam-tree--meta-is-prefix-string)
+          
+          (unless (eq (char-before) ?\n)
+            (insert "\n")
+            (setq lines (1+ lines))
+            ) ;; convert visual wraps to hard newlines
+          
+          ;; insert the prefix, ensuring we're not adding empty prefixes to
+          ;; empty lines : stops occasional infinite loops.
+          (unless
+              (get-text-property (line-beginning-position) org-roam-tree--meta-is-prefix-string)
             (let ((prefix (org-roam-tree-make-prefix depth nil is-last-vec))
                   (line-text (buffer-substring-no-properties (line-beginning-position) (line-end-position))))
               (unless (cl-loop for c across (concat prefix line-text) always (eq c ?\s))
                 (insert prefix))))
-            )
 
           (vertical-motion 1) ;; much faster than line-move-visual,
-                              ;; but requires manual point tracking
+          ;; but requires manual point tracking
           ))
       lines)))
 
