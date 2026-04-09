@@ -145,6 +145,19 @@ PATH is a vector representing the node's position in the tree."
 
 
 
+
+;;;;;;;; for simulating "links" that we construct in non-roam ways
+;; Can be reused for a nice looking voew for your own created
+;; "links"
+(cl-defstruct org-roam-tree-simlink
+  file      ;; full path to file
+  title     ;; usually filename or a short description
+  row       ;; line number in file
+  col       ;; column number in file
+  point     ;; optional character position; if nil, row/col is used - TODO
+  body      ;; the text content to render (string, can have text properties)
+  properties) ;; any extra metadata as a plist - TODO
+
 ;;;;;;;;;;;;;;;;;;;; TREE DISPLAY LOGIC
 (cl-defun org-roam-tree-section
     (node &key
@@ -601,17 +614,6 @@ NODE defaults to `(org-roam-node-at-point)` if nil."
           (delete-file temp-file))))))
 
  
-;;;;;;;; for simulating "links" that we construct in non-roam ways
-;; Can be reused for a nice looking voew for your own created
-;; "links"
-(cl-defstruct org-roam-tree-simlink
-  file      ;; full path to file
-  title     ;; usually filename or a short description
-  row       ;; line number in file
-  col       ;; column number in file
-  point     ;; optional character position; if nil, row/col is used - TODO
-  body      ;; the text content to render (string, can have text properties)
-  properties) ;; any extra metadata as a plist - TODO
 
 
 (cl-defun org-roam-tree-simlink-insert-section (simlink)
