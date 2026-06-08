@@ -830,5 +830,13 @@ reload."
 (add-hook 'org-roam-buffer-postrender-functions
           #'org-roam-tree--add-header-buttons)
 
+(defun org-roam-tree--redisplay-after-render ()
+  "Force redisplay of org-roam buffer after node navigation."
+  (when (org-roam-tree--active-p)
+    (redisplay)))
+
+(add-hook 'org-roam-buffer-postrender-functions
+          #'org-roam-tree--redisplay-after-render)
+
 (provide 'org-roam-tree)
 ;;; org-roam-tree.el ends here
