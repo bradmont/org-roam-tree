@@ -698,8 +698,8 @@ to each CROSSLINK-ID (i.e., nodes linked to by multiple backlinks appear first).
       (while (and (not (eobp))
                   (not (eq (magit-current-section) magit-root-section)))
 
-        (when-let ((sec (magit-current-section)))
-          (magit-section-show-children sec))
+         (when-let ((sec (magit-current-section)))
+           (magit-section-show-children sec))
 
         (when (get-text-property (point) org-roam-tree--meta-depth)
           (let* ((meta (org-roam-tree--get-node-metadata (point)))
