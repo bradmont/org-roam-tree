@@ -105,6 +105,35 @@ Defaults to `org-roam-tree-default-visible' if no state stored."
   (org-roam-tree-section node :section-heading section-heading :data-getter #'org-roam-tree-crosslinks :section-id 'crosslinks-tree))
 
 
+(cl-defun org-roam-tree-section
+    (node &key
+          (section-heading "Tree Section:")
+          (data-getter #'org-roam-tree-backlinks)
+          (section-id 'org-roam-tree-section))
+    "The generic section. Just add water."
+
+  (setq org-roam-tree--prefixed-lines-count 0)
+  (with-org-roam-tree-layout
+   (when-let ((tree (funcall data-getter node)))
+     
+     (magit-insert-section section-id
+       (progn
+       (magit-insert-heading section-heading)
+
+       ;; tree is now just a list of top-level nodes
+       (let ((count (length tree))
+             (is-last-vec (make-vector 8 nil))
+             (depth 0))
+         (cl-loop for n in tree
+                  for idx from 1
+                  for lastp = (= idx count) do
+                  (aset is-last-vec depth lastp)
+                  (org-roam-tree--render-node
+                   n
+                   (1+ depth)
+                   is-last-vec)))))))
+(run-with-idle-timer 0.05 nil #'org-roam-tree--apply-folded-state))
+
 
 
 ;;;;;;;;;;;;;;;;;;;; TREE DISPLAY METADATA
@@ -148,12 +177,10 @@ PATH is a vector representing the node's position in the tree."
              (plist-get meta :path))))
 
 
-
 
-
-;;;;;;;; for simulating "links" that we construct in non-roam ways
-;; Can be reused for a nice looking voew for your own created
-;; "links"
+;;;;;;;; simlinks: structure for simulating "links" that we construct in
+;; non-roam ways. Can be reused for a nice looking view for your own created
+;; "links". This needs to be defined above where it's used.
 (cl-defstruct org-roam-tree-simlink
   file      ;; full path to file
   title     ;; usually filename or a short description
@@ -162,35 +189,9 @@ PATH is a vector representing the node's position in the tree."
   point     ;; optional character position; if nil, row/col is used - TODO
   body      ;; the text content to render (string, can have text properties)
   properties) ;; any extra metadata as a plist - TODO
+
 
 ;;;;;;;;;;;;;;;;;;;; TREE DISPLAY LOGIC
-(cl-defun org-roam-tree-section
-    (node &key
-          (section-heading "Tree Section:")
-          (data-getter #'org-roam-tree-backlinks)
-          (section-id 'org-roam-tree-section))
-
-  (setq org-roam-tree--prefixed-lines-count 0)
-  (with-org-roam-tree-layout
-   (when-let ((tree (funcall data-getter node)))
-     
-     (magit-insert-section section-id
-       (progn
-       (magit-insert-heading section-heading)
-
-       ;; tree is now just a list of top-level nodes
-       (let ((count (length tree))
-             (is-last-vec (make-vector 8 nil))
-             (depth 0))
-         (cl-loop for n in tree
-                  for idx from 1
-                  for lastp = (= idx count) do
-                  (aset is-last-vec depth lastp)
-                  (org-roam-tree--render-node
-                   n
-                   (1+ depth)
-                   is-last-vec)))))))
-(run-with-idle-timer 0.05 nil #'org-roam-tree--apply-folded-state))
 
 (defun org-roam-tree--render-node (node depth is-last-vec &optional parent-path)
   (let* ((value    (if (consp node) (car node) node))
@@ -273,45 +274,6 @@ PATH is a vector representing the node's position in the tree."
     (string
      (magit-insert-heading (format "%s (%d)" (file-name-nondirectory value) (length children))))))
 
-
-
-
-(defun org-roam-tree--apply-folded-state ()
-  "Walk the Org-roam tree buffer and fold sections based on stored metadata."
-    (with-current-buffer (get-buffer "*org-roam*")
-    ;(magit-section-show-level-4-all)
-    (save-excursion
-      (goto-char (point-min))
-
-                  (vertical-motion 1)
-      (while (and (not (eobp))
-                  (not (eq (magit-current-section) magit-root-section)))
-
-        (when-let ((sec (magit-current-section)))
-          (magit-section-show-children sec))
-
-        (when (get-text-property (point) org-roam-tree--meta-depth)
-          (let* ((meta (org-roam-tree--get-node-metadata (point)))
-                 (node-id (org-roam-node-id org-roam-buffer-current-node))
-                 (path (plist-get meta :path))
-                 (depth (plist-get meta :depth))
-                 (visible (org-roam-tree--node-visible-state node-id path)))
-            (if
-                (and
-                 (if (booleanp visible)
-                     visible
-                   (> depth visible))
-                 (not (magit-section-hidden (magit-current-section))))
-                     
-                (progn
-                  (forward-char (* depth 3)) ; make sure we're in the section
-                (magit-section-hide (magit-current-section)))
-              )))
-        (magit-section-forward)
-        )
-    (force-window-update))))
-
-
 (defmacro with-org-roam-tree-layout (&rest body)
   "Ensure proper visual layout for Org-roam tree rendering.
 
@@ -337,45 +299,6 @@ BODY is the code that renders the tree content."
          (set-window-margins (selected-window)
                              (car old-margin)
                              (cdr old-margin)))))))
-
-(defun org-roam-tree--track-toggle (&rest _args)
-  "Save fold state for the section just toggled."
-  (when-let ((section (magit-current-section)))
-    (let*
-        ((inhibit-read-only t)
-         (node org-roam-buffer-current-node)
-              (start (oref section start))
-              (path (get-text-property start org-roam-tree--meta-path))
-              (hidden (not (org-roam-tree--node-visible-state (org-roam-node-id node) path))))
-
-    ;; Store state: visible = not hidden
-      (unless hidden
-        (with-org-roam-tree-layout
-         (goto-char start)
-         
-         (org-roam-tree--prefix-node-content )
-         )
-        )
-      (org-roam-tree--set-node-visible-state node path hidden))))
-
-(advice-add 'magit-section-toggle :after #'org-roam-tree--track-toggle)
-
-(defun org-roam-tree--refontify-toggled-section (&rest _)
-  "Redisplay on expanding; otherwise newly expanded sections don't
-display on first try"
-  (redisplay))
-
-(defun org-roam-tree--refontify-toggled-section (&rest _)
-  "Refontify the currently toggled Magit section for org-roam-tree."
-  (when (org-roam-tree-active-p) ;; your existing buffer check
-    (let ((section (magit-current-section)))
-      (when section
-        (jit-lock-refontify
-         (oref section start)
-         (oref section end))))))
-
-(advice-add 'magit-section-toggle :after
-            #'org-roam-tree--refontify-toggled-section)
 
 (defun org-roam-tree--jit-prefix-range (start end)
   "Prefix all un-prefixed lines between START and END.
@@ -438,8 +361,6 @@ node start whose :prefixed metadata is missing."
           (lambda ()
             (jit-lock-register #'org-roam-tree--jit-prefix)))
 
-
-
 (defun org-roam-tree--prefix-node-content ()
   "Insert tree prefixes for a node's rendered content.
 
@@ -497,8 +418,6 @@ as prefixed to avoid duplication."
           ))
       lines))
 
-
-
 (defun org-roam-tree-make-prefix (depth is-node is-last)
   "Generate a tree-style prefix string for a line.
 
@@ -525,6 +444,13 @@ and the branch is not last at any other level"
     
         (setq prefix (propertize prefix org-roam-tree--meta-is-prefix-string t))
     prefix))
+
+
+
+
+;;;;;;;;;;;;;;;;;;;; Sections content definitions
+;; These are logic for selecting and structuring node trees to
+;; display.
 
 (defun org-roam-tree-backlinks (&optional node)
   "Return backlinks of NODE grouped by source file.
@@ -573,7 +499,6 @@ NODE defaults to `org-roam-node-at-point` if nil."
          (push (cons file (nreverse reflinks)) result))
        table)
       result)))
-
 
 (defun org-roam-tree-unlinked-references (&optional node)
 
@@ -639,9 +564,6 @@ NODE defaults to `(org-roam-node-at-point)` if nil."
           ;; Clean up temp file
           (delete-file temp-file))))))
 
- 
-
-
 (cl-defun org-roam-tree-simlink-insert-section (simlink)
   "Insert a section for SIMLINK in the org-roam tree buffer.
 
@@ -667,10 +589,6 @@ This mirrors `org-roam-node-insert-section`, but works for simulated links."
       (oset section col col)
       ;(oset section properties props)
       (insert ?\n))))
-
-
-
-
 
 (defun org-roam-tree-crosslink-query (node-id)
 "Return a list of triples for nodes two hops from NODE-ID.
@@ -763,7 +681,82 @@ to each CROSSLINK-ID (i.e., nodes linked to by multiple backlinks appear first).
                 (> (length (cdr a))
                    (length (cdr b))))))))
 
+
+;;;;;;;;;;;;;;;;;;;; Folding logic
+;; What is shown, what is collapsed; track state when navigating between
+;; nodes.
+;;
 
+(defun org-roam-tree--apply-folded-state ()
+  "Walk the Org-roam tree buffer and fold sections based on stored metadata."
+    (with-current-buffer (get-buffer "*org-roam*")
+    ;(magit-section-show-level-4-all)
+    (save-excursion
+      (goto-char (point-min))
+
+                  (vertical-motion 1)
+      (while (and (not (eobp))
+                  (not (eq (magit-current-section) magit-root-section)))
+
+        (when-let ((sec (magit-current-section)))
+          (magit-section-show-children sec))
+
+        (when (get-text-property (point) org-roam-tree--meta-depth)
+          (let* ((meta (org-roam-tree--get-node-metadata (point)))
+                 (node-id (org-roam-node-id org-roam-buffer-current-node))
+                 (path (plist-get meta :path))
+                 (depth (plist-get meta :depth))
+                 (visible (org-roam-tree--node-visible-state node-id path)))
+            (if
+                (and
+                 (if (booleanp visible)
+                     visible
+                   (> depth visible))
+                 (not (magit-section-hidden (magit-current-section))))
+                     
+                (progn
+                  (forward-char (* depth 3)) ; make sure we're in the section
+                (magit-section-hide (magit-current-section)))
+              )))
+        (magit-section-forward)
+        )
+    (force-window-update))))
+
+(defun org-roam-tree--track-toggle (&rest _args)
+  "Save fold state for the section just toggled."
+  (when-let ((section (magit-current-section)))
+    (let*
+        ((inhibit-read-only t)
+         (node org-roam-buffer-current-node)
+              (start (oref section start))
+              (path (get-text-property start org-roam-tree--meta-path))
+              (hidden (not (org-roam-tree--node-visible-state (org-roam-node-id node) path))))
+
+    ;; Store state: visible = not hidden
+      (unless hidden
+        (with-org-roam-tree-layout
+         (goto-char start)
+         
+         (org-roam-tree--prefix-node-content )
+         )
+        )
+      (org-roam-tree--set-node-visible-state node path hidden))))
+
+(advice-add 'magit-section-toggle :after #'org-roam-tree--track-toggle)
+
+(defun org-roam-tree--refontify-toggled-section (&rest _)
+  "Refontify the currently toggled Magit section for org-roam-tree."
+  (when (org-roam-tree--active-p) ;; your existing buffer check
+    (let ((section (magit-current-section)))
+      (when section
+        (jit-lock-refontify
+         (oref section start)
+         (oref section end))))
+    (redisplay)
+    ))
+
+(advice-add 'magit-section-toggle :after
+            #'org-roam-tree--refontify-toggled-section)
 
 
 ;;;;;;;;;;;;;;;;;;;; MENU BUTTON
