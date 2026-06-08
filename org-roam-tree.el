@@ -32,14 +32,21 @@
 ;;(setq! org-roam-mode-sections '(org-roam-tree-backlinks-section))
 ;;(setq! org-roam-mode-sections '(org-roam-tree-reflinks-section))
 ;;(setq! org-roam-mode-sections '(org-roam-tree-crosslinks-section))
+;;(setq! org-roam-mode-sections '(org-roam-tree-unlinked-references-section))
 ;;
 ;; Add this section with the others in the org-roam buffer:
 ;;(add-to-list 'org-roam-mode-sections
 ;;             #'org-roam-tree-backlinks-section t)
 ;;
-;; DO NOT DO THIS :
+;; You can have multiple sections, with caveats :
+;; 
 ;;(setq! org-roam-mode-sections '(org-roam-tree-crosslinks-section org-roam-tree-backlinks-section))
-;;having two trees in the same roam buffer is currently somewhat broken. Use at your own risk.
+;;(setq! org-roam-mode-sections '(org-roam-tree-unlinked-references-section org-roam-tree-backlinks-section))
+;;
+;;having two trees in the same roam buffer currently has a couple of bugs. The
+;;trees will display in the opposit order that they are listed, and there are
+;;some rendering abnormalities with the tree prefexis. It seems functional, but
+;;there is still work to do.
 ;;
 
 (require 'org-roam)
@@ -98,6 +105,7 @@ Defaults to `org-roam-tree-default-visible' if no state stored."
   (org-roam-tree-section node :section-heading section-heading :data-getter #'org-roam-tree-crosslinks :section-id 'crosslinks-tree))
 
 
+
 
 ;;;;;;;;;;;;;;;;;;;; TREE DISPLAY METADATA
 ;; On building the tree, we store metadata including depth and tree branch parts
@@ -109,7 +117,6 @@ Defaults to `org-roam-tree-default-visible' if no state stored."
 
 (defconst org-roam-tree--meta-depth 'org-roam-tree-depth)
 (defconst org-roam-tree--meta-is-last 'org-roam-tree-is-last)
-(defconst org-roam-tree--meta-prefixed 'org-roam-tree-prefixed)
 (defconst org-roam-tree--meta-path 'org-roam-tree-path)
 (defconst org-roam-tree--meta-is-prefix-string 'org-roam-tree-prefix)
 
@@ -121,7 +128,6 @@ PATH is a vector representing the node's position in the tree."
    (list
     org-roam-tree--meta-depth depth
     org-roam-tree--meta-is-last (copy-sequence is-last-vec)
-    ;org-roam-tree--meta-prefixed nil
     org-roam-tree--meta-path path)))
 
 (defun org-roam-tree--get-node-metadata (pos)
@@ -129,7 +135,6 @@ PATH is a vector representing the node's position in the tree."
   (list
    :depth    (get-text-property pos org-roam-tree--meta-depth)
    :is-last  (get-text-property pos org-roam-tree--meta-is-last)
-   :prefixed (get-text-property pos org-roam-tree--meta-prefixed)
    :path     (get-text-property pos org-roam-tree--meta-path)))
 
 (defun org-roam-tree--message-node-metadata (pos)
@@ -185,7 +190,7 @@ PATH is a vector representing the node's position in the tree."
                    n
                    (1+ depth)
                    is-last-vec)))))))
-(run-at-time 0.05 nil #'org-roam-tree--apply-folded-state))
+(run-with-idle-timer 0.05 nil #'org-roam-tree--apply-folded-state))
 
 (defun org-roam-tree--render-node (node depth is-last-vec &optional parent-path)
   (let* ((value    (if (consp node) (car node) node))
@@ -223,7 +228,6 @@ PATH is a vector representing the node's position in the tree."
 
       ;; store tree metadata at node start
       (org-roam-tree--store-node-metadata start depth is-last-vec path)
-      ;(org-roam-tree--message-node-metadata start)
 
       (when (< org-roam-tree--prefixed-lines-count (window-body-height))
         ;;Prefix the immediately visible nodes. Do the rest lazily.
@@ -304,7 +308,8 @@ PATH is a vector representing the node's position in the tree."
                 (magit-section-hide (magit-current-section)))
               )))
         (magit-section-forward)
-        ))))
+        )
+    (force-window-update))))
 
 
 (defmacro with-org-roam-tree-layout (&rest body)
@@ -337,24 +342,49 @@ BODY is the code that renders the tree content."
   "Save fold state for the section just toggled."
   (when-let ((section (magit-current-section)))
     (let*
-              ((node org-roam-buffer-current-node)
+        ((inhibit-read-only t)
+         (node org-roam-buffer-current-node)
               (start (oref section start))
               (path (get-text-property start org-roam-tree--meta-path))
               (hidden (not (org-roam-tree--node-visible-state (org-roam-node-id node) path))))
 
     ;; Store state: visible = not hidden
-    (org-roam-tree--set-node-visible-state node path hidden))))
+      (unless hidden
+        (with-org-roam-tree-layout
+         (goto-char start)
+         
+         (org-roam-tree--prefix-node-content )
+         )
+        )
+      (org-roam-tree--set-node-visible-state node path hidden))))
 
 (advice-add 'magit-section-toggle :after #'org-roam-tree--track-toggle)
 
+(defun org-roam-tree--refontify-toggled-section (&rest _)
+  "Redisplay on expanding; otherwise newly expanded sections don't
+display on first try"
+  (redisplay))
+
+(defun org-roam-tree--refontify-toggled-section (&rest _)
+  "Refontify the currently toggled Magit section for org-roam-tree."
+  (when (org-roam-tree-active-p) ;; your existing buffer check
+    (let ((section (magit-current-section)))
+      (when section
+        (jit-lock-refontify
+         (oref section start)
+         (oref section end))))))
+
+(advice-add 'magit-section-toggle :after
+            #'org-roam-tree--refontify-toggled-section)
 
 (defun org-roam-tree--jit-prefix-range (start end)
-  "Prefix all un-prefixed nodes between START and END.
+  "Prefix all un-prefixed lines between START and END.
 
 Snaps START to the nearest node boundary, then walks visual lines
 until END, calling `org-roam-tree--prefix-node-content' at each
 node start whose :prefixed metadata is missing."
-  (let ((needed-prefixing nil))
+  (let ((needed-prefixing nil)
+        node-start-pos)
   (with-org-roam-tree-layout
       ;; ---- snap START to a node boundary ----
       (goto-char start)
@@ -372,14 +402,15 @@ node start whose :prefixed metadata is missing."
                     (/= (point) last-point))
           (setq last-point (point))
 
-          ;; Node start?
-          (when (and (get-text-property (point) org-roam-tree--meta-depth)
-                     (not (get-text-property (point) org-roam-tree--meta-prefixed)))
-            (save-excursion
-              (org-roam-tree--prefix-node-content)
-              (setq needed-prefixing t)
-              ))
+          ;; track start
+          (when (get-text-property (point) org-roam-tree--meta-depth)
+            (setq node-start-pos (point)))
 
+          (unless (get-text-property (point) org-roam-tree--meta-is-prefix-string)
+            (save-excursion ;;;###
+              (goto-char node-start-pos)
+              (setq needed-prefixing (or needed-prefixing (> 0 
+                                                               (org-roam-tree--prefix-node-content))))))
           ;; move by visual lines
           (forward-line 1)
           (beginning-of-line))))
@@ -408,6 +439,7 @@ node start whose :prefixed metadata is missing."
             (jit-lock-register #'org-roam-tree--jit-prefix)))
 
 
+
 (defun org-roam-tree--prefix-node-content ()
   "Insert tree prefixes for a node's rendered content.
 
@@ -420,25 +452,19 @@ as prefixed to avoid duplication."
          (path (plist-get meta :path))
          (depth (plist-get meta :depth))
          (start (point))
-         (lines 1))
-    ;; ALREADY prefixed? skip
-    (unless prefixed
+         (lines 0))
 
       ;; First visual line
-      (insert (org-roam-tree-make-prefix depth t is-last-vec))
-
-                                        ; move metadata to new beginning of line
-      (remove-text-properties
+      (unless (get-text-property (line-beginning-position)
+                                 org-roam-tree--meta-is-prefix-string)
+        (insert (org-roam-tree-make-prefix depth t is-last-vec))
+        (setq lines 1))
+      (remove-text-properties ; move metadata to new beginning of line
        (point) (1+ (point))
        (list org-roam-tree--meta-depth nil
-             org-roam-tree--meta-is-last nil
-             org-roam-tree--meta-prefixed nil))
+             org-roam-tree--meta-is-last nil))
                                         ; org-roam-tree--meta-path nil)) -- leave this one for easier lookup on fold
       (org-roam-tree--store-node-metadata start depth is-last-vec path)
-
-      ;; Mark as prefixed
-      (add-text-properties start (1+ start)
-                           `(,org-roam-tree--meta-prefixed t))
 
       ;; Subsequent visual lines, stop at next node or eobp
       (let ((last-point -1))
@@ -469,7 +495,7 @@ as prefixed to avoid duplication."
           (vertical-motion 1) ;; much faster than line-move-visual,
           ;; but requires manual point tracking
           ))
-      lines)))
+      lines))
 
 
 
