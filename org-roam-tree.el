@@ -56,7 +56,8 @@
   :group 'org-roam)
 
 (defcustom org-roam-tree-default-visible 1
-  "Default fold below this level. 0 is top-level groups folded."
+  "Default fold below this level. 0 is top-level groups folded.
+  2 will show node content on most trees."
   :type 'integer
   :group 'org-roam-tree)
 
