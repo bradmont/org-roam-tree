@@ -189,6 +189,7 @@ PATH is a vector representing the node's position in the tree."
   col       ;; column number in file
   point     ;; optional character position; if nil, row/col is used - TODO
   body      ;; the text content to render (string, can have text properties)
+  match     ;; the text matching our search regex
   properties) ;; any extra metadata as a plist - TODO
 
 
@@ -546,6 +547,7 @@ NODE defaults to `(org-roam-node-at-point)` if nil."
                                  :file f
                                  :row row
                                  :col col
+                                 :match match
                                  :body body))
 
                       (let* ((matches (gethash f file-tree)))
@@ -567,7 +569,6 @@ NODE defaults to `(org-roam-node-at-point)` if nil."
 
 (cl-defun org-roam-tree-simlink-insert-section (simlink)
   "Insert a section for SIMLINK in the org-roam tree buffer.
-
 This mirrors `org-roam-node-insert-section`, but works for simulated links."
   (let ((title (org-roam-tree-simlink-title simlink))
         (file  (org-roam-tree-simlink-file simlink))
@@ -577,18 +578,20 @@ This mirrors `org-roam-node-insert-section`, but works for simulated links."
         (body  (org-roam-tree-simlink-body simlink))
         (props (org-roam-tree-simlink-properties simlink)))
     ;; Parent section for the file/title
-    (magit-insert-section section (org-roam-node-section)
+    (magit-insert-section section (org-roam-node-section simlink)
+      (oset section keymap 'org-roam-tree-simlink-map)
       (insert (propertize title 'font-lock-face 'org-roam-title)
               (when (and row col) (format " (%d:%d)" row col))))
     ;; Child section for the content
     (magit-insert-heading)
-    (magit-insert-section section (org-roam-grep-section)
+    (magit-insert-section section (org-roam-grep-section simlink)
       (insert body "\n")
       (oset section file file)
       ;(when point (oset section point point))
       (oset section row row)
       (oset section col col)
       ;(oset section properties props)
+      (oset section keymap 'org-roam-tree-simlink-map)
       (insert ?\n))))
 
 (defun org-roam-tree-crosslink-query (node-id)
@@ -682,6 +685,93 @@ to each CROSSLINK-ID (i.e., nodes linked to by multiple backlinks appear first).
                 (> (length (cdr a))
                    (length (cdr b))))))))
 
+
+
+;;;;;;;;;;;;;;;;;;;; Unlinked reference conversion
+;; Helpers and keymap to convert unlinked references to proper backlinks
+;;
+(defvar org-roam-tree-simlink-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'org-roam-tree-simlink-visit)
+    (define-key map [mouse-1]   #'org-roam-tree-simlink-visit)
+    (define-key map [mouse-3]   #'org-roam-tree-simlink-context-menu)
+    (define-key map (kbd "c")   #'org-roam-tree-convert-unlinked-reference)
+    map)
+  "Keymap active on simlink sections in the unlinked-references tree.")
+
+(defun org-roam-tree-simlink-visit ()
+  "Visit the file location of the simlink section at point."
+  (interactive)
+  (when-let* ((section (magit-current-section))
+              (simlink (oref section value)))
+    (find-file (org-roam-tree-simlink-file simlink))
+    (goto-char (point-min))
+    (forward-line (1- (org-roam-tree-simlink-row simlink)))
+    (move-to-column (max 0 (1- (org-roam-tree-simlink-col simlink))))))
+
+(defun org-roam-tree-simlink-context-menu (event)
+  "Right-click context menu for the unlinked-reference section at EVENT."
+  (interactive "e")
+  (let ((win (posn-window (event-start event))))
+    (with-selected-window win
+      (save-excursion
+        (goto-char (posn-point (event-start event)))
+        (when-let* ((section (magit-current-section))
+                    (simlink (oref section value)))
+          (popup-menu
+           (list "Unlinked reference"
+                 (vector "Convert to backlink"
+                         (list #'org-roam-tree-convert-unlinked-reference
+                               (list 'quote simlink))))))))))
+
+(defun org-roam-tree-convert-unlinked-reference (&optional simlink)
+  "Convert SIMLINK (or the one at point) into a proper ID link back to
+the node currently shown in the org-roam buffer."
+  (interactive)
+  (let* ((simlink (or simlink
+                       (let ((section (magit-current-section)))
+                         (and section (org-roam-tree-simlink-p (oref section value))
+                              (oref section value)))))
+         (node org-roam-buffer-current-node))
+    (unless (org-roam-tree-simlink-p simlink)
+      (user-error "No unlinked reference at point"))
+    (unless node
+      (user-error "No org-roam node found for this buffer"))
+    (org-roam-tree--convert-simlink-to-backlink simlink node)))
+
+(defun org-roam-tree--convert-simlink-to-backlink (simlink node)
+  "Rewrite the text SIMLINK matched in its source file as an ID link
+to NODE, then refresh the org-roam db and buffer."
+  (let* ((file    (org-roam-tree-simlink-file simlink))
+         (row     (org-roam-tree-simlink-row simlink))
+         (col     (org-roam-tree-simlink-col simlink))
+         (match   (org-roam-tree-simlink-match simlink))
+         (node-id (org-roam-node-id node))
+         (buf     (find-file-noselect file)))
+    (unless (and match (> (length match) 0))
+      (user-error "No matched text stored for this reference; re-run the unlinked references search"))
+    (with-current-buffer buf
+      (save-excursion
+        (goto-char (point-min))
+        (forward-line (1- row))
+        (let ((p1 (save-excursion (move-to-column (max 0 (1- col))) (point)))
+              (p2 (save-excursion (move-to-column col) (point))))
+          (goto-char
+           (cond
+            ((save-excursion (goto-char p1) (looking-at (regexp-quote match))) p1)
+            ((save-excursion (goto-char p2) (looking-at (regexp-quote match))) p2)
+            (t (beginning-of-line)
+               (unless (re-search-forward (regexp-quote match) (line-end-position) t)
+                 (user-error "Couldn't find %S on line %d of %s — the file may have changed"
+                             match row (file-name-nondirectory file)))
+               (match-beginning 0))))
+          (delete-region (point) (+ (point) (length match)))
+          (insert (format "[[id:%s][%s]]" node-id match))))
+      (save-buffer))
+    (org-roam-db-update-file file)
+    (when (get-buffer-window org-roam-buffer)
+      (org-roam-buffer-refresh))
+    (message "Linked %S to %S" match (org-roam-node-title node))))
 
 ;;;;;;;;;;;;;;;;;;;; Folding logic
 ;; What is shown, what is collapsed; track state when navigating between
