@@ -77,6 +77,28 @@ regardless of major mode."
   :type 'function
   :group 'org-roam-tree)
 
+(defcustom org-roam-tree-auto-refresh-buffer nil
+  "If non-nil, automatically refresh the org-roam buffer after
+converting an unlinked reference to a backlink, or removing a
+backlink. If nil, the buffer is not refreshed (much faster when
+processing many links in a row); the affected entry is instead
+marked in place -- underlined for a new link, struck through for
+a removed one -- until the buffer is next refreshed."
+  :type 'boolean
+  :group 'org-roam-tree)
+
+(defface org-roam-tree-added-face
+  '((t :underline t))
+  "Face marking a tree entry just converted to a backlink, when
+`org-roam-tree-auto-refresh-buffer' is nil."
+  :group 'org-roam-tree)
+
+(defface org-roam-tree-removed-face
+  '((t :strike-through t))
+  "Face marking a tree entry whose backlink was just removed, when
+`org-roam-tree-auto-refresh-buffer' is nil."
+  :group 'org-roam-tree)
+
 (defun org-roam-tree--org-mode-buffer-p (buffer)
   (with-current-buffer buffer
     (derived-mode-p 'org-mode)))
@@ -714,7 +736,7 @@ to each CROSSLINK-ID (i.e., nodes linked to by multiple backlinks appear first).
 
 
 
-;;;;;;;;;;;;;;;;;;;; Unlinked reference conversion
+;;;;;;;;;;;;;;;;;;;; Linked/unlinked reference conversion
 ;; Helpers and keymap to convert unlinked references to proper backlinks
 ;;
 
@@ -747,7 +769,9 @@ the node currently shown in the org-roam buffer."
 (defun org-roam-tree--convert-simlink-to-backlink (simlink node)
   "Rewrite the text SIMLINK matched in its source file as an ID link
 to NODE, then refresh the org-roam db and buffer."
-  (let* ((file    (org-roam-tree-simlink-file simlink))
+  (let* ((mark-buf (current-buffer))
+         (mark-pos (point))
+         (file    (org-roam-tree-simlink-file simlink))
          (row     (org-roam-tree-simlink-row simlink))
          (col     (org-roam-tree-simlink-col simlink))
          (match   (org-roam-tree-simlink-match simlink))
@@ -774,9 +798,87 @@ to NODE, then refresh the org-roam db and buffer."
           (insert (format "[[id:%s][%s]]" node-id match))))
       (save-buffer))
     (org-roam-db-update-file file)
-    (when (get-buffer-window org-roam-buffer)
-      (org-roam-buffer-refresh))
+    (org-roam-tree--refresh-or-mark mark-buf mark-pos 'org-roam-tree-added-face)
     (message "Linked %S to %S" match (org-roam-node-title node))))
+
+
+;; Backlink removal: Convert a real ID-linked backlink back into plain text, in place
+
+(defun org-roam-tree-remove-backlink (&optional backlink)
+  "Remove the ID link for BACKLINK (or the one at point) in its
+source file, replacing it with its plain display text so the
+connection is no longer a link."
+  (interactive)
+  (let* ((backlink (or backlink
+                        (let ((value (org-roam-tree--leaf-value-at-point)))
+                          (and (org-roam-backlink-p value) value)))))
+    (unless backlink
+      (user-error "No backlink at point"))
+    (let* ((source-node (org-roam-backlink-source-node backlink))
+           (target-node (org-roam-backlink-target-node backlink))
+           (source-title (and source-node (org-roam-node-title source-node)))
+           (target-title (or (and target-node (org-roam-node-title target-node))
+                              (and org-roam-buffer-current-node
+                                   (org-roam-node-title org-roam-buffer-current-node)))))
+      (when (yes-or-no-p (format "Remove backlink %S to node %S? "
+                                  source-title target-title))
+        (org-roam-tree--remove-backlink-link backlink)))))
+
+(defun org-roam-tree--remove-backlink-link (backlink)
+  "Replace the ID link represented by BACKLINK in its source file
+with its plain display text, then refresh the org-roam db and
+buffer."
+  (let* ((mark-buf (current-buffer))
+         (mark-pos (point))
+         (source-node (org-roam-backlink-source-node backlink))
+         (file (org-roam-node-file source-node))
+         (pos  (org-roam-backlink-point backlink))
+         (buf  (find-file-noselect file))
+         replacement)
+    (unless pos
+      (user-error "No position recorded for this backlink"))
+    (with-current-buffer buf
+      (save-excursion
+        (goto-char pos)
+        (let ((link (org-element-context)))
+          (unless (eq (org-element-type link) 'link)
+            (user-error "No link found at the recorded position — the file may have changed"))
+          (let* ((begin (org-element-property :begin link))
+                 (end   (- (org-element-property :end link)
+                           (or (org-element-property :post-blank link) 0)))
+                 (cbeg  (org-element-property :contents-begin link))
+                 (cend  (org-element-property :contents-end link)))
+            (setq replacement (if (and cbeg cend)
+                                   (buffer-substring-no-properties cbeg cend)
+                                 (org-element-property :raw-link link)))
+            (goto-char begin)
+            (delete-region begin end)
+            (insert replacement))))
+      (save-buffer))
+    (org-roam-db-update-file file)
+    (org-roam-tree--refresh-or-mark mark-buf mark-pos 'org-roam-tree-removed-face)
+    (message "Removed link, kept text: %S" replacement)))
+
+
+(defun org-roam-tree--mark-leaf-at (buffer pos face)
+  "Apply FACE to the tree node's displayed text at POS in BUFFER, as
+a lightweight visual marker in lieu of a full refresh."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let* ((bounds (org-roam-tree--node-text-bounds pos))
+             (start (car bounds))
+             (end   (cdr bounds))
+             (inhibit-read-only t))
+        (add-face-text-property start end face)))))
+
+(defun org-roam-tree--refresh-or-mark (buffer pos face)
+  "Refresh the org-roam buffer if `org-roam-tree-auto-refresh-buffer'
+is non-nil; otherwise mark the tree entry at POS in BUFFER with FACE
+instead."
+  (if org-roam-tree-auto-refresh-buffer
+      (when (get-buffer-window org-roam-buffer)
+        (org-roam-buffer-refresh))
+    (org-roam-tree--mark-leaf-at buffer pos face)))
 
 
 ;;;;;;;;;;;;;;;;;;;; Reference copying
@@ -1044,10 +1146,12 @@ at that buffer's own point. Does not change window focus."
     (with-selected-window win
       (save-excursion
         (goto-char (posn-point (event-start event)))
-        (popup-menu
-         '("Quote"
-           ["Quote to node buffer" org-roam-tree-quote-to-node]
-           ["Quote to buffer..."   org-roam-tree-quote-to-buffer]))))))
+        (let* ((value (org-roam-tree--leaf-value-at-point))
+               (items (list ["Quote to node buffer" org-roam-tree-quote-to-node]
+                             ["Quote to buffer..."   org-roam-tree-quote-to-buffer])))
+          (when (org-roam-backlink-p value)
+            (push ["Remove backlink" org-roam-tree-remove-backlink] items))
+          (popup-menu (cons "Actions" (nreverse items))))))))
 
 
 
