@@ -61,6 +61,30 @@
   :type 'integer
   :group 'org-roam-tree)
 
+(defcustom org-roam-tree-quote-source-prefix "SOURCE:"
+  "Prefix inserted before the source link when copying a quote."
+  :type 'string
+  :group 'org-roam-tree)
+
+(defcustom org-roam-tree-quote-target-predicate #'org-roam-tree--org-mode-buffer-p
+  "Predicate function used to filter candidate buffers for
+`org-roam-tree-quote-to-buffer'. Called with a buffer, no
+arguments (buffer is current when called). Should return non-nil
+if the buffer is a valid copy target.
+
+Set this to `#'always' to allow copying to any open buffer,
+regardless of major mode."
+  :type 'function
+  :group 'org-roam-tree)
+
+(defun org-roam-tree--org-mode-buffer-p (buffer)
+  (with-current-buffer buffer
+    (derived-mode-p 'org-mode)))
+
+(defvar org-roam-tree--quote-target-history nil
+  "List of buffer names previously used as quote-copy targets, most
+recent first.")
+
 
 (defvar org-roam-tree-visible-state (make-hash-table :test 'equal)
   "Stores fold states for nodes in multi-level trees.
@@ -252,27 +276,30 @@ PATH is a vector representing the node's position in the tree."
                     is-last-vec
                     path)))))))
 
+
 (defun org-roam-tree--insert-leaf (value children)
   (cl-typecase value
     (org-roam-backlink
-     (org-roam-node-insert-section
-      :source-node (org-roam-backlink-source-node value)
-      :point (org-roam-backlink-point value)
-      :properties (org-roam-backlink-properties value)
-
-      
-     ))
+     (let ((start (point)))
+       (org-roam-node-insert-section
+        :source-node (org-roam-backlink-source-node value)
+        :point (org-roam-backlink-point value)
+        :properties (org-roam-backlink-properties value))
+       (put-text-property start (point) 'keymap org-roam-tree-backlink-map)
+       (put-text-property start (point) 'org-roam-tree-leaf-value value)))
     (org-roam-reflink
      (when-let ((pt (org-roam-reflink-point value)))
-       (org-roam-node-insert-section
-        :source-node (org-roam-reflink-source-node value)
-        :point pt
-        :properties (org-roam-reflink-properties value)
-
-        ))
-     )
+       (let ((start (point)))
+         (org-roam-node-insert-section
+          :source-node (org-roam-reflink-source-node value)
+          :point pt
+          :properties (org-roam-reflink-properties value))
+         (put-text-property start (point) 'keymap org-roam-tree-backlink-map)
+         (put-text-property start (point) 'org-roam-tree-leaf-value value))))
     (org-roam-tree-simlink
-       (org-roam-tree-simlink-insert-section value))
+     (let ((start (point)))
+       (org-roam-tree-simlink-insert-section value)
+       (put-text-property start (point) 'org-roam-tree-leaf-value value)))
     (string
      (magit-insert-heading (format "%s (%d)" (file-name-nondirectory value) (length children))))))
 
@@ -690,14 +717,6 @@ to each CROSSLINK-ID (i.e., nodes linked to by multiple backlinks appear first).
 ;;;;;;;;;;;;;;;;;;;; Unlinked reference conversion
 ;; Helpers and keymap to convert unlinked references to proper backlinks
 ;;
-(defvar org-roam-tree-simlink-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "RET") #'org-roam-tree-simlink-visit)
-    (define-key map [mouse-1]   #'org-roam-tree-simlink-visit)
-    (define-key map [mouse-3]   #'org-roam-tree-simlink-context-menu)
-    (define-key map (kbd "c")   #'org-roam-tree-convert-unlinked-reference)
-    map)
-  "Keymap active on simlink sections in the unlinked-references tree.")
 
 (defun org-roam-tree-simlink-visit ()
   "Visit the file location of the simlink section at point."
@@ -709,20 +728,6 @@ to each CROSSLINK-ID (i.e., nodes linked to by multiple backlinks appear first).
     (forward-line (1- (org-roam-tree-simlink-row simlink)))
     (move-to-column (max 0 (1- (org-roam-tree-simlink-col simlink))))))
 
-(defun org-roam-tree-simlink-context-menu (event)
-  "Right-click context menu for the unlinked-reference section at EVENT."
-  (interactive "e")
-  (let ((win (posn-window (event-start event))))
-    (with-selected-window win
-      (save-excursion
-        (goto-char (posn-point (event-start event)))
-        (when-let* ((section (magit-current-section))
-                    (simlink (oref section value)))
-          (popup-menu
-           (list "Unlinked reference"
-                 (vector "Convert to backlink"
-                         (list #'org-roam-tree-convert-unlinked-reference
-                               (list 'quote simlink))))))))))
 
 (defun org-roam-tree-convert-unlinked-reference (&optional simlink)
   "Convert SIMLINK (or the one at point) into a proper ID link back to
@@ -772,6 +777,279 @@ to NODE, then refresh the org-roam db and buffer."
     (when (get-buffer-window org-roam-buffer)
       (org-roam-buffer-refresh))
     (message "Linked %S to %S" match (org-roam-node-title node))))
+
+
+;;;;;;;;;;;;;;;;;;;; Reference copying
+;; Functions to quickly copy backlink content to another open buffer
+;;
+(defun org-roam-tree--node-text-bounds (pos)
+  "Return (START . END) of the tree node at POS, found via metadata
+text properties rather than magit-section's (possibly stale) start/end."
+  (let (start end)
+    (save-excursion
+      (goto-char pos)
+      (beginning-of-line)
+      (while (and (> (point) (point-min))
+                  (not (get-text-property (point) org-roam-tree--meta-depth)))
+        (forward-line -1))
+      (setq start (point))
+      (forward-line 1)
+      (while (and (not (eobp))
+                  (not (get-text-property (point) org-roam-tree--meta-depth)))
+        (forward-line 1))
+      (setq end (point)))
+    (cons start end)))
+
+(defun org-roam-tree--section-preview-text (section)
+  "Return SECTION's displayed body text, from its heading's end to
+its end, with tree-prefix decoration stripped."
+  (unless (cl-typep (oref section value)
+                     '(or org-roam-backlink org-roam-reflink org-roam-tree-simlink))
+    (user-error "Point is not on a quotable section (got %s)"
+                (type-of (oref section value))))
+  ;; section start/end are plain integers captured at insertion time, and
+  ;; can go stale once org-roam-tree--prefix-node-content starts inserting
+  ;; text (prefixes, hard newlines) into the buffer during jit-lock passes.
+  ;; Use the metadata text properties instead, which move correctly with
+  ;; the buffer, to find the node's real current boundaries.
+  (let* ((bounds (org-roam-tree--node-text-bounds (oref section start)))
+         (start (car bounds))
+         (end   (cdr bounds))
+         (chunks nil))
+    (save-excursion
+      (goto-char start)
+      (while (< (point) end)
+        (let* ((line-start (point))
+               (line-end (min end (line-end-position))))
+          (unless (get-text-property line-start org-roam-tree--meta-is-prefix-string)
+            (push (buffer-substring-no-properties line-start line-end) chunks))
+          ;; if the line *starts* with a prefix, find where the prefix ends
+          ;; and grab the remainder instead of dropping the whole line
+          (when (get-text-property line-start org-roam-tree--meta-is-prefix-string)
+            (let ((prefix-end
+                   (next-single-property-change
+                    line-start org-roam-tree--meta-is-prefix-string nil line-end)))
+              (when (and prefix-end (< prefix-end line-end))
+                (push (buffer-substring-no-properties prefix-end line-end) chunks))))
+          (goto-char (min end (1+ line-end))))))
+    (string-trim (mapconcat #'identity (nreverse chunks) ""))))
+
+(defun org-roam-tree--simlink-source-link (simlink)
+  "Return (ID-OR-NIL . LINK-TEXT) describing where SIMLINK points,
+preferring an ID link to the enclosing org-roam node if one can be
+found, falling back to a `file:' link at the matched line."
+  (let* ((file (org-roam-tree-simlink-file simlink))
+         (row  (org-roam-tree-simlink-row simlink)))
+    (if (string-match-p "\\.org\\'" file)
+        (let* ((buf (find-file-noselect file))
+               (node (with-current-buffer buf
+                       (save-excursion
+                         (goto-char (point-min))
+                         (forward-line (1- row))
+                         (org-roam-node-at-point)))))
+          (if node
+              (cons (format "[[id:%s][%s]]"
+                            (org-roam-node-id node)
+                            (org-roam-node-title node))
+                    nil)
+            (cons (format "[[file:%s::%d][%s]]" file row
+                          (file-name-nondirectory file))
+                  nil)))
+      (cons (format "[[file:%s::%d][%s]]" file row
+                    (file-name-nondirectory file))
+            nil))))
+
+(defun org-roam-tree--leaf-value-at-point ()
+  "Return the backlink/reflink/simlink at point, preferring the
+`org-roam-tree-leaf-value' text property set at insertion time, and
+falling back to walking up section parents for it."
+  (or (get-text-property (point) 'org-roam-tree-leaf-value)
+      (let ((section (magit-current-section)))
+        (while (and section
+                    (not (cl-typep (oref section value)
+                                   '(or org-roam-backlink org-roam-reflink org-roam-tree-simlink))))
+          (setq section (oref section parent)))
+        (and section (oref section value)))))
+
+(defun org-roam-tree--value-source-link (value)
+  "Return an org link string describing the source of VALUE (a
+backlink, reflink, or simlink)."
+  (cl-typecase value
+    (org-roam-backlink
+     (let ((node (org-roam-backlink-source-node value)))
+       (format "[[id:%s][%s]]" (org-roam-node-id node) (org-roam-node-title node))))
+    (org-roam-reflink
+     (let ((node (org-roam-reflink-source-node value)))
+       (format "[[id:%s][%s]]" (org-roam-node-id node) (org-roam-node-title node))))
+    (org-roam-tree-simlink
+     (car (org-roam-tree--simlink-source-link value)))
+    (t (user-error "No source link available for this position"))))
+
+(defun org-roam-tree--preview-text-at-point ()
+  "Return the displayed body text of the tree node at point, with
+tree-prefix decoration stripped."
+  (let* ((bounds (org-roam-tree--node-text-bounds (point)))
+         (start (car bounds))
+         (end   (cdr bounds))
+         (chunks nil))
+    (save-excursion
+      (goto-char start)
+      (while (< (point) end)
+        (let* ((line-start (point))
+               (line-end (min end (line-end-position))))
+          (unless (get-text-property line-start org-roam-tree--meta-is-prefix-string)
+            (push (buffer-substring-no-properties line-start line-end) chunks))
+          (when (get-text-property line-start org-roam-tree--meta-is-prefix-string)
+            (let ((prefix-end (next-single-property-change
+                                line-start org-roam-tree--meta-is-prefix-string nil line-end)))
+              (when (and prefix-end (< prefix-end line-end))
+                (push (buffer-substring-no-properties prefix-end line-end) chunks))))
+          (goto-char (min end (1+ line-end))))))
+    (string-trim (mapconcat #'identity (nreverse chunks) ""))))
+
+(defun org-roam-tree--build-quote-block ()
+  "Build the #+begin_quote block text for the leaf node at point."
+  (let* ((value (org-roam-tree--leaf-value-at-point)))
+    (unless value
+      (user-error "No quotable backlink/reflink/simlink at point"))
+    (format "\n#+begin_quote\n%s %s\n%s\n#+end_quote\n\n"
+            org-roam-tree-quote-source-prefix
+            (org-roam-tree--value-source-link value)
+            (org-roam-tree--preview-text-at-point))))
+
+(defun org-roam-tree--insert-quote-string (quote-text)
+  "Insert the already-built QUOTE-TEXT at point, skipping past any
+enclosing #+begin_quote...#+end_quote first."
+  (when (org-in-block-p '("quote"))
+    (re-search-forward "^[ \t]*#\\+end_quote[ \t]*$" nil t)
+    (forward-line 1)
+    (beginning-of-line))
+  (insert quote-text))
+
+
+(defun org-roam-tree--insert-quote-block (section)
+  "Insert SECTION's quote block at point, skipping past any
+enclosing #+begin_quote...#+end_quote first."
+  (when (org-in-block-p '("quote"))
+    (re-search-forward "^[ \t]*#\\+end_quote[ \t]*$" nil t)
+    (forward-line 1)
+    (beginning-of-line))
+  (insert (org-roam-tree--build-quote-block section)))
+
+
+;;;;;;;; The functions to call from context menu
+;; copy to org-roam-buffer's own source node buffer
+(defun org-roam-tree-quote-to-node ()
+  "Copy the quote at point into the buffer visiting the current
+org-roam node, at that buffer's own window point. Errors if that
+buffer has no visible window."
+  (interactive)
+  (let* ((node org-roam-buffer-current-node)
+         (file (and node (org-roam-node-file node)))
+         (buf (and file (get-file-buffer file)))
+         (win (and buf (get-buffer-window buf))))
+    (unless win
+      (user-error "Node buffer is not visible in any window"))
+    ;; build the quote text now, while *org-roam* is still current --
+    ;; extraction relies on buffer-local text properties/positions that
+    ;; are only meaningful in this buffer
+    (let ((quote-text (org-roam-tree--build-quote-block)))
+      (with-selected-window win
+        (org-roam-tree--insert-quote-string quote-text)))))
+
+;; copy to any arbitrary buffer
+
+(defun org-roam-tree--quote-target-candidates ()
+  "Return candidate buffer names for quote-copy targets, most
+recently used first, filtered by
+`org-roam-tree-quote-target-predicate'."
+  (let* ((valid (cl-remove-if-not org-roam-tree-quote-target-predicate (buffer-list)))
+         (names (mapcar #'buffer-name valid)))
+    (append
+     (cl-remove-if-not (lambda (n) (member n names))
+                        org-roam-tree--quote-target-history)
+     (cl-set-difference names org-roam-tree--quote-target-history :test #'equal))))
+
+(defun org-roam-tree--read-target-buffer ()
+  "Prompt for a buffer to copy a quote into. Uses consult's preview
+UI if available, else plain `completing-read'. Returns a buffer."
+  (let* ((candidates (org-roam-tree--quote-target-candidates))
+         (choice
+          (if (and (fboundp 'consult--read)
+                    (fboundp 'consult--buffer-state))
+              (consult--read
+               candidates
+               :prompt "Copy quote to buffer: "
+               :require-match t
+               :sort nil
+               :category 'buffer
+               :state (consult--buffer-state))
+            (completing-read "Copy quote to buffer: " candidates nil t))))
+    (setq org-roam-tree--quote-target-history
+          (cons choice (remove choice org-roam-tree--quote-target-history)))
+    (get-buffer choice)))
+
+(defun org-roam-tree-quote-to-buffer ()
+  "Copy the quote at point into a buffer selected via completing-read,
+at that buffer's own point. Does not change window focus."
+  (interactive)
+    ;; same ordering requirement as org-roam-tree-quote-to-node
+    (let ((quote-text (org-roam-tree--build-quote-block))
+          (target (org-roam-tree--read-target-buffer)))
+      (with-current-buffer target
+        (org-roam-tree--insert-quote-string quote-text))))
+
+(defvar org-roam-tree-backlink-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map org-roam-node-map)
+    (define-key map (kbd "q") #'org-roam-tree-quote-to-node)
+    (define-key map (kbd "Q") #'org-roam-tree-quote-to-buffer)
+    (define-key map [mouse-3] #'org-roam-tree--quote-popup-menu)
+    map))
+
+(defvar org-roam-tree-simlink-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'org-roam-tree-simlink-visit)
+    (define-key map [mouse-1]   #'org-roam-tree-simlink-visit)
+    (define-key map [mouse-3]   #'org-roam-tree-simlink-context-menu)
+    (define-key map (kbd "c")   #'org-roam-tree-convert-unlinked-reference)
+    (define-key map (kbd "q") #'org-roam-tree-quote-to-node)
+    (define-key map (kbd "Q") #'org-roam-tree-quote-to-buffer)
+    map)
+  "Keymap active on simlink sections in the unlinked-references tree.")
+
+
+(defun org-roam-tree-simlink-context-menu (event)
+  "Right-click context menu for the unlinked-reference section at EVENT."
+  (interactive "e")
+  (let ((win (posn-window (event-start event))))
+    (with-selected-window win
+      (save-excursion
+        (goto-char (posn-point (event-start event)))
+        (when-let* ((section (magit-current-section))
+                    (simlink (oref section value)))
+          (popup-menu
+           (list "Unlinked reference"
+                 (vector "Convert to backlink"
+                         (list #'org-roam-tree-convert-unlinked-reference
+                               (list 'quote simlink)))
+                 (vector "Quote to node buffer"
+                         (list #'org-roam-tree-quote-to-node))
+                 (vector "Quote to buffer..."
+                         (list #'org-roam-tree-quote-to-buffer)))))))))
+
+(defun org-roam-tree--quote-popup-menu (event)
+  (interactive "e")
+  (let ((win (posn-window (event-start event))))
+    (with-selected-window win
+      (save-excursion
+        (goto-char (posn-point (event-start event)))
+        (popup-menu
+         '("Quote"
+           ["Quote to node buffer" org-roam-tree-quote-to-node]
+           ["Quote to buffer..."   org-roam-tree-quote-to-buffer]))))))
+
+
 
 ;;;;;;;;;;;;;;;;;;;; Folding logic
 ;; What is shown, what is collapsed; track state when navigating between
