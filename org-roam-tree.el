@@ -1234,8 +1234,9 @@ at that buffer's own point. Does not change window focus."
             #'org-roam-tree--refontify-toggled-section)
 
 
-;;;;;;;;;;;;;;;;;;;; MENU BUTTON
+;;;;;;;;;;;;;;;;;;;; MENU BUTTONs
 ;; Menu to quickly change the roam buffer sections
+
 
 (defmacro org-roam-tree--make-button (label fn &rest props)
   "Create a header-line button with LABEL that runs FN after ensuring window focus."
@@ -1249,11 +1250,51 @@ at that buffer's own point. Does not change window focus."
                                 (org-roam-tree--helper-ensure-buffer-focus event ,fn)))
                             m)))
 
-(setq org-roam-tree--header-buttons
-  (list
-   (org-roam-tree--make-button "" #'org-roam-tree--header-menu
-                          ;:help "Menu")
-   )))
+
+;;;;;; pin the org-roam buffer to its current view
+(defcustom org-roam-tree-follow-point t
+  "Whether org-roam-tree follows point."
+  :type 'boolean
+  :group 'org-roam-tree)
+
+(defun org-roam-tree-toggle-follow-point ()
+  (interactive)
+  (setq org-roam-tree-follow-point
+        (not org-roam-tree-follow-point))
+  (message "Org-roam follow point %s"
+           (if org-roam-tree-follow-point "enabled" "disabled"))
+
+  (if org-roam-tree-follow-point
+      (setq org-roam-tree--follow-icon "☑")
+    (setq org-roam-tree--follow-icon "☐"))
+  (org-roam-tree--update-buttons)
+  (org-roam-tree--add-header-buttons)
+  )
+
+(if org-roam-tree-follow-point
+      (setq org-roam-tree--follow-icon "☑")
+    (setq org-roam-tree--follow-icon "☐"))
+
+(defun org-roam-tree--redisplay-h-advice (orig-fun &rest args)
+  (when org-roam-tree-follow-point
+    (apply orig-fun args)))
+
+(advice-add 'org-roam-buffer--redisplay-h
+            :around
+            #'org-roam-tree--redisplay-h-advice)
+
+
+(defun org-roam-tree--update-buttons()
+  (setq org-roam-tree--header-buttons
+        (list
+         (org-roam-tree--make-button org-roam-tree--follow-icon #'org-roam-tree-toggle-follow-point
+                                     :help "Toggle follow")
+
+                                        ; hamburger menu
+         (org-roam-tree--make-button "" #'org-roam-tree--header-menu
+                                        ;:help "Menu"
+                                     ))))
+(org-roam-tree--update-buttons)
 
 (defun org-roam-tree--helper-ensure-buffer-focus (event fn &rest args)
   "Ensure the clicked window is selected, then call FN with ARGS."
@@ -1281,26 +1322,24 @@ reload."
   (org-roam-buffer-refresh))
 
 (defun org-roam-tree--add-header-buttons ()
-  (let* ((title (propertize
-                 (org-roam-node-title org-roam-buffer-current-node)
-                 'face 'bold))
-         (btn-list org-roam-tree--header-buttons)
-         (btn-width ;; Compute total width for right alignment
-          (apply #'+
-                 (mapcar (lambda (btn)
-                           (+ 2 (string-width btn))) ; +1 for space
-                         btn-list))))
-    (setq header-line-format
-          `(
-            ,title
-            ;; Flexible space before the buttons
-            (:eval (propertize
-                    " "
-                    'display '((space :align-to (- right ,btn-width)))))
-
-            ;; Insert each button followed by one space
-            ,@(cl-mapcan (lambda (btn) (list btn " "))
-                         btn-list)))))
+  (when (and org-roam-buffer-current-node (org-roam-node-title org-roam-buffer-current-node))
+    (let* ((title (propertize
+                   (org-roam-node-title org-roam-buffer-current-node)
+                   'face 'bold))
+           (btn-list org-roam-tree--header-buttons)
+           (btn-width
+            (apply #'+
+                   (mapcar (lambda (btn)
+                             (+ 2 (string-width btn)))
+                           btn-list))))
+      (setq header-line-format
+            `(
+              ,title
+              (:eval (propertize
+                      " "
+                      'display '((space :align-to (- right ,btn-width)))))
+              ,@(cl-mapcan (lambda (btn) (list btn " "))
+                           btn-list))))))
 
 (add-hook 'org-roam-buffer-postrender-functions
           #'org-roam-tree--add-header-buttons)
