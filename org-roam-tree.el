@@ -521,11 +521,13 @@ NODE defaults to `org-roam-node-at-point` if nil."
                    (cons bl (gethash file table))
                    table))))
     (let (result)
-      (maphash
-       (lambda (file backlinks)
-         (push (cons file (nreverse backlinks)) result))
-       table)
-      result)))
+  (maphash
+   (lambda (file backlinks)
+     (push (cons file (nreverse backlinks)) result))
+   table)
+  (sort result (lambda (a b)
+                 (> (length (cdr a))
+                    (length (cdr b))))))))
 
 (defun org-roam-tree-reflinks (&optional node)
   "Return reflinks of NODE grouped by source file.
