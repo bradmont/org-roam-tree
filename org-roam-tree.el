@@ -151,6 +151,66 @@ Defaults to `org-roam-tree-default-visible' if no state stored."
   "A tree-style crosslinks section for NODE, grouping by source file."
   (org-roam-tree-section node :section-heading section-heading :data-getter #'org-roam-tree-crosslinks :section-id 'crosslinks-tree))
 
+(cl-defun org-roam-tree-search-string-section (node &key search-string)
+  "A tree-style section that searches for an arbitrary SEARCH-STRING
+across the org-roam directory.
+
+When SEARCH-STRING is nil the user is prompted interactively.
+The section heading reflects the query used."
+  (let* ((query (or search-string
+                    (read-string "Search org-roam for: ")))
+         (heading (format "Search \"%s\":" query)))
+    (org-roam-tree-section node
+                           :section-heading heading
+                           :data-getter (lambda (_node)
+                                          (org-roam-tree-search-string query))
+                           :section-id 'search-string-tree)))
+
+
+(defun org-roam-tree--render-search (query)
+  "Render the org-roam buffer with a search section for QUERY.
+A nil-safe alternative to `org-roam-buffer-render-contents' for use
+when `org-roam-buffer-current-node' may be nil (i.e. when the buffer
+is opened without prior node navigation).  On subsequent navigation
+renders, the upstream function runs normally with a valid node."
+  (let* ((inhibit-read-only t)
+         (dir (or (bound-and-true-p org-roam-buffer-current-directory)
+                  org-roam-directory)))
+    (erase-buffer)
+    (org-roam-mode)
+    (setq-local default-directory dir)
+    (setq-local org-roam-directory dir)
+    ;; Only call org-roam-node-title when we actually have a node;
+    ;; --add-header-buttons will set "Search: QUERY" via the postrender hook.
+    (when org-roam-buffer-current-node
+      (org-roam-buffer-set-header-line-format
+       (org-roam-node-title org-roam-buffer-current-node)))
+    (magit-insert-section (org-roam)
+      (magit-insert-heading)
+      (org-roam-tree-search-string-section org-roam-buffer-current-node
+                                           :search-string query))
+    (run-hooks 'org-roam-buffer-postrender-functions)
+    (goto-char 0)))
+
+;;;###autoload
+(defun org-roam-tree-search (query)
+  "Open the org-roam buffer and display search results for QUERY.
+
+QUERY is searched as a literal word-boundary pattern across all files
+in `org-roam-directory'.  When called interactively, prompt for QUERY.
+May also be called non-interactively with QUERY as a string.
+
+The org-roam buffer is created and displayed if it is not already
+visible.  Subsequent calls replace the previous search results."
+  (interactive "sSearch org-roam for: ")
+  (when (and query (not (string-empty-p query)))
+    (setq org-roam-mode-sections
+          (list (list #'org-roam-tree-search-string-section
+                      :search-string query)))
+    (let ((buf (get-buffer-create org-roam-buffer)))
+      (display-buffer buf)
+      (with-current-buffer buf
+        (org-roam-tree--render-search query)))))
 
 (cl-defun org-roam-tree-section
     (node &key
@@ -360,6 +420,7 @@ node start whose :prefixed metadata is missing."
   (let ((needed-prefixing nil)
         node-start-pos)
   (with-org-roam-tree-layout
+      (let ((inhibit-read-only t))
       ;; ---- snap START to a node boundary ----
       (goto-char start)
       (beginning-of-line)
@@ -387,25 +448,33 @@ node start whose :prefixed metadata is missing."
                                                                (org-roam-tree--prefix-node-content))))))
           ;; move by visual lines
           (forward-line 1)
-          (beginning-of-line))))
+          (beginning-of-line)))))
   needed-prefixing))
 
 (defun org-roam-tree--active-p ()
-  "Return non-nil if an org-roam-tree section is active."
+  "Return non-nil if an org-roam-tree section is active.
+Handles both bare symbol form (e.g. `org-roam-tree-backlinks-section')
+and list form (e.g. `(org-roam-tree-search-string-section :search-string \"foo\")')."
   (and (boundp 'org-roam-mode-sections)
        (cl-some (lambda (s)
-                  (and (symbolp s)
-                       (string-prefix-p "org-roam-tree"
-                                        (symbol-name s))))
+                  (let ((fn (cond ((symbolp s) s)
+                                  ((consp s)  (car s)))))
+                    (and (symbolp fn)
+                         (string-prefix-p "org-roam-tree"
+                                          (symbol-name fn)))))
                 org-roam-mode-sections)))
 
 (defun org-roam-tree--jit-prefix (start end)
+  (message "jit-prefix called: start=%s end=%s" start end)
   (when (and (derived-mode-p 'org-roam-mode)
              (org-roam-tree--active-p))
     (if (org-roam-tree--jit-prefix-range start end) ;; t if made changes
         (let ((range-end (min (+ start (* 6 (- end start))) (point-max))))
           ;; batch ahead for responsiveness
-          (org-roam-tree--jit-prefix-range end range-end))
+          (message "beep")
+          (org-roam-tree--jit-prefix-range end range-end)
+(force-window-update (get-buffer-window org-roam-buffer))
+          )
       )))
 
 (add-hook 'org-roam-mode-hook
@@ -451,7 +520,8 @@ as prefixed to avoid duplication."
           (setq last-point (point))
           
           (unless (eq (char-before) ?\n)
-            (insert "\n")
+
+            (insert (propertize "\n" org-roam-tree--meta-is-prefix-string t))
             (setq lines (1+ lines))
             ) ;; convert visual wraps to hard newlines
           
@@ -523,7 +593,11 @@ NODE defaults to `org-roam-node-at-point` if nil."
     (let (result)
   (maphash
    (lambda (file backlinks)
-     (push (cons file (nreverse backlinks)) result))
+     (push (cons file (sort (nreverse backlinks)
+                            (lambda (a b)
+                              (< (org-roam-backlink-point a)
+                                 (org-roam-backlink-point b)))))
+           result))
    table)
   (sort result (lambda (a b)
                  (> (length (cdr a))
@@ -549,7 +623,11 @@ NODE defaults to `org-roam-node-at-point` if nil."
     (let (result)
       (maphash
        (lambda (file reflinks)
-         (push (cons file (nreverse reflinks)) result))
+         (push (cons file (sort (nreverse reflinks)
+                                (lambda (a b)
+                                  (< (org-roam-reflink-point a)
+                                     (org-roam-reflink-point b)))))
+               result))
        table)
       result)))
 
@@ -604,11 +682,15 @@ NODE defaults to `(org-roam-node-at-point)` if nil."
                       (let* ((matches (gethash f file-tree)))
                         (puthash f (cons simlink matches) file-tree))
                       ))))
-              ;; Convert hash table to list of lists, reversing matches for correct order
+              ;; Convert hash table to list of lists, sorted by source-file position
               (let (result)
                 (maphash
                  (lambda (filename matches)
-                   (push (cons filename (nreverse matches)) result))
+                   (push (cons filename (sort (nreverse matches)
+                                              (lambda (a b)
+                                                (< (org-roam-tree-simlink-row a)
+                                                   (org-roam-tree-simlink-row b)))))
+                         result))
                  file-tree)
         (sort result
               (lambda (a b)
@@ -616,6 +698,77 @@ NODE defaults to `(org-roam-node-at-point)` if nil."
                    (length (cdr b)))))
                 ))
           ;; Clean up temp file
+          (delete-file temp-file))))))
+
+(defun org-roam-tree--search-string-rg-command (search-string temp-file)
+  "Return a ripgrep command that searches for SEARCH-STRING as a literal
+word-boundary pattern across the org-roam directory.
+Writes the PCRE2 pattern to TEMP-FILE to avoid shell-escaping issues."
+  (with-temp-file temp-file
+    (insert (format "\\b%s\\b" (regexp-quote search-string))))
+  (concat "rg --follow --only-matching --vimgrep --pcre2 --ignore-case "
+          (mapconcat (lambda (glob) (concat "--glob " glob))
+                     (org-roam--list-files-search-globs org-roam-file-extensions)
+                     " ")
+          " --file " (shell-quote-argument temp-file) " "
+          (shell-quote-argument (expand-file-name org-roam-directory))))
+
+(defun org-roam-tree-search-string (&optional search-string)
+  "Return matches for SEARCH-STRING across the roam directory as a simlink tree.
+
+When called interactively (or with SEARCH-STRING nil) prompts the user
+for the string to search.
+
+Tree format:
+  ((FILENAME . (SIMLINK SIMLINK ...)) ...)
+
+Unlike `org-roam-tree-unlinked-references', this searches for an
+arbitrary literal string rather than the current node's title or aliases,
+and does not exclude any file."
+  (let ((search-string (or search-string
+                           (read-string "Search org-roam for: "))))
+    (when (and (not (string-empty-p search-string))
+               (executable-find "rg")
+               (not (string-match "PCRE2 is not available"
+                                  (shell-command-to-string "rg --pcre2-version"))))
+      (let* ((temp-file (make-temp-file "org-roam-rg-pattern-"))
+             (rg-command (org-roam-tree--search-string-rg-command search-string temp-file))
+             (file-tree (make-hash-table :test 'equal)))
+        (unwind-protect
+            (let* ((results (split-string (shell-command-to-string rg-command) "\n"))
+                   f row col match body start)
+              (dolist (line results)
+                (save-match-data
+                  (when (string-match org-roam-unlinked-references-result-re line)
+                    (setq f     (match-string 1 line)
+                          row   (string-to-number (match-string 2 line))
+                          col   (string-to-number (match-string 3 line))
+                          match (match-string 4 line)
+                          body  (propertize
+                                 (org-roam-fontify-like-in-org-mode
+                                  (org-roam-unlinked-references-preview-line f row)))
+                          start (and match (string-match (regexp-quote match) body)))
+                    (when match
+                      (when start
+                        (put-text-property start (+ start (length match))
+                                           'face 'org-link-file body))
+                      (let ((simlink (make-org-roam-tree-simlink
+                                      :title (file-name-nondirectory f)
+                                      :file f
+                                      :row row
+                                      :col col
+                                      :match match
+                                      :body body)))
+                        (puthash f (cons simlink (gethash f file-tree)) file-tree))))))
+              (let (result)
+                (maphash (lambda (filename matches)
+                           (push (cons filename (sort (nreverse matches)
+                                                      (lambda (a b)
+                                                        (< (org-roam-tree-simlink-row a)
+                                                           (org-roam-tree-simlink-row b)))))
+                                 result))
+                         file-tree)
+                (sort result (lambda (a b) (> (length (cdr a)) (length (cdr b)))))))
           (delete-file temp-file))))))
 
 (cl-defun org-roam-tree-simlink-insert-section (simlink)
@@ -722,7 +875,11 @@ to each CROSSLINK-ID (i.e., nodes linked to by multiple backlinks appear first).
          (let (files)
            (maphash
             (lambda (file bls)
-              (push (cons file (nreverse bls)) files))
+              (push (cons file (sort (nreverse bls)
+                                     (lambda (a b)
+                                       (< (org-roam-backlink-point a)
+                                          (org-roam-backlink-point b)))))
+                    files))
             file-table)
            (let ((crosslink-node (org-roam-node-from-id crosslink-id)))
              (push (cons (if crosslink-node
@@ -797,7 +954,9 @@ to NODE, then refresh the org-roam db and buffer."
                              match row (file-name-nondirectory file)))
                (match-beginning 0))))
           (delete-region (point) (+ (point) (length match)))
-          (insert (format "[[id:%s][%s]]" node-id match))))
+          (insert (format "[[id:%s][%s]]" node-id match))
+          (org-id-get-create)
+          ))
       (save-buffer))
     (org-roam-db-update-file file)
     (org-roam-tree--refresh-or-mark mark-buf mark-pos 'org-roam-tree-added-face)
@@ -821,10 +980,31 @@ connection is no longer a link."
            (source-title (and source-node (org-roam-node-title source-node)))
            (target-title (or (and target-node (org-roam-node-title target-node))
                               (and org-roam-buffer-current-node
-                                   (org-roam-node-title org-roam-buffer-current-node)))))
-      (when (yes-or-no-p (format "Remove backlink %S to node %S? "
-                                  source-title target-title))
+                                   (org-roam-node-title org-roam-buffer-current-node))))
+           (link-text (org-roam-tree--backlink-link-text backlink)))
+      (when (yes-or-no-p (format "Remove backlink %S from %S to node %S? "
+                                  (or link-text "?") source-title target-title))
         (org-roam-tree--remove-backlink-link backlink)))))
+
+(defun org-roam-tree--backlink-link-text (backlink)
+  "Return the displayed text of BACKLINK's link in its source file,
+without modifying anything. Returns nil if the link can't be found
+at the recorded position."
+  (let* ((source-node (org-roam-backlink-source-node backlink))
+         (file (org-roam-node-file source-node))
+         (pos  (org-roam-backlink-point backlink))
+         (buf  (and pos (find-file-noselect file))))
+    (when buf
+      (with-current-buffer buf
+        (save-excursion
+          (goto-char pos)
+          (let ((link (org-element-context)))
+            (when (eq (org-element-type link) 'link)
+              (let ((cbeg (org-element-property :contents-begin link))
+                    (cend (org-element-property :contents-end link)))
+                (if (and cbeg cend)
+                    (buffer-substring-no-properties cbeg cend)
+                  (org-element-property :raw-link link))))))))))
 
 (defun org-roam-tree--remove-backlink-link (backlink)
   "Replace the ID link represented by BACKLINK in its source file
@@ -1103,11 +1283,20 @@ at that buffer's own point. Does not change window focus."
       (with-current-buffer target
         (org-roam-tree--insert-quote-string quote-text))))
 
+(defun org-roam-tree-quote-to-kill-ring ()
+  "Copy the quote at point into kill-ring."
+  (interactive)
+    ;; same ordering requirement as org-roam-tree-quote-to-node
+    (let ((quote-text (org-roam-tree--build-quote-block)))
+        (kill-new quote-text)))
+
 (defvar org-roam-tree-backlink-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map org-roam-node-map)
+    (define-key map (kbd "r") #'org-roam-tree-remove-backlink)
     (define-key map (kbd "q") #'org-roam-tree-quote-to-node)
     (define-key map (kbd "Q") #'org-roam-tree-quote-to-buffer)
+    (define-key map (kbd "y") #'org-roam-tree-quote-to-kill-ring)
     (define-key map [mouse-3] #'org-roam-tree--quote-popup-menu)
     map))
 
@@ -1119,6 +1308,7 @@ at that buffer's own point. Does not change window focus."
     (define-key map (kbd "c")   #'org-roam-tree-convert-unlinked-reference)
     (define-key map (kbd "q") #'org-roam-tree-quote-to-node)
     (define-key map (kbd "Q") #'org-roam-tree-quote-to-buffer)
+    (define-key map (kbd "y") #'org-roam-tree-quote-to-kill-ring)
     map)
   "Keymap active on simlink sections in the unlinked-references tree.")
 
@@ -1140,7 +1330,10 @@ at that buffer's own point. Does not change window focus."
                  (vector "Quote to node buffer"
                          (list #'org-roam-tree-quote-to-node))
                  (vector "Quote to buffer..."
-                         (list #'org-roam-tree-quote-to-buffer)))))))))
+                         (list #'org-roam-tree-quote-to-buffer))
+                 (vector "Quote to kill-ring..."
+                         (list #'org-roam-tree-quote-to-kill-ring))
+                         )))))))
 
 (defun org-roam-tree--quote-popup-menu (event)
   (interactive "e")
@@ -1150,7 +1343,9 @@ at that buffer's own point. Does not change window focus."
         (goto-char (posn-point (event-start event)))
         (let* ((value (org-roam-tree--leaf-value-at-point))
                (items (list ["Quote to node buffer" org-roam-tree-quote-to-node]
-                             ["Quote to buffer..."   org-roam-tree-quote-to-buffer])))
+                            ["Quote to buffer..."   org-roam-tree-quote-to-buffer]
+                            ["Quote to kill-ring..."   org-roam-tree-quote-to-kill-ring]
+                            )))
           (when (org-roam-backlink-p value)
             (push ["Remove backlink" org-roam-tree-remove-backlink] items))
           (popup-menu (cons "Actions" (nreverse items))))))))
@@ -1265,15 +1460,15 @@ at that buffer's own point. Does not change window focus."
            (if org-roam-tree-follow-point "enabled" "disabled"))
 
   (if org-roam-tree-follow-point
-      (setq org-roam-tree--follow-icon "☑")
-    (setq org-roam-tree--follow-icon "☐"))
+      (setq org-roam-tree--follow-icon "👁")
+    (setq org-roam-tree--follow-icon "🖈"))
   (org-roam-tree--update-buttons)
   (org-roam-tree--add-header-buttons)
   )
 
 (if org-roam-tree-follow-point
-      (setq org-roam-tree--follow-icon "☑")
-    (setq org-roam-tree--follow-icon "☐"))
+      (setq org-roam-tree--follow-icon "👁")
+    (setq org-roam-tree--follow-icon "🖈"))
 
 (defun org-roam-tree--redisplay-h-advice (orig-fun &rest args)
   (when org-roam-tree-follow-point
@@ -1305,6 +1500,17 @@ at that buffer's own point. Does not change window focus."
 
 (setq org-roam-tree--roam-sections-cookie org-roam-mode-sections)
 
+(defun org-roam-tree--search-string-from-menu ()
+  "Prompt for a search string, then switch the roam buffer to the search section.
+Called from the header menu. Prompts are issued *before* any rendering so
+that `get-buffer-window' is reliable during the subsequent buffer refresh."
+  (interactive)
+  (let ((query (read-string "Search org-roam for: ")))
+    (unless (string-empty-p query)
+      (org-roam-tree--change-sections
+       (list (list #'org-roam-tree-search-string-section
+                   :search-string query))))))
+
 (defun org-roam-tree--header-menu ()
   (popup-menu
    '("menu"
@@ -1312,7 +1518,8 @@ at that buffer's own point. Does not change window focus."
      ["Backlinks tree" (org-roam-tree--change-sections '(org-roam-tree-backlinks-section))]
      ["Reflinks tree" (org-roam-tree--change-sections '(org-roam-tree-reflinks-section))]
      ["Unlinked References tree" (org-roam-tree--change-sections '(org-roam-tree-unlinked-references-section))]
-     ["Crosslinks tree" (org-roam-tree--change-sections '(org-roam-tree-crosslinks-section))])))
+     ["Crosslinks tree" (org-roam-tree--change-sections '(org-roam-tree-crosslinks-section))]
+     ["Search string..." (org-roam-tree--search-string-from-menu)])))
 
 (defun org-roam-tree--change-sections (sections)
   "Change the sections displayed in org-roam buffer to sections and
@@ -1321,11 +1528,23 @@ reload."
   (setq org-roam-mode-sections sections)
   (org-roam-buffer-refresh))
 
+(defun org-roam-tree--active-search-query ()
+  "Return the search query string if a search-string section is currently
+active in `org-roam-mode-sections', otherwise nil."
+  (cl-some (lambda (s)
+              (when (and (consp s)
+                         (eq (car s) 'org-roam-tree-search-string-section))
+                (plist-get (cdr s) :search-string)))
+            org-roam-mode-sections))
+
 (defun org-roam-tree--add-header-buttons ()
-  (when (and org-roam-buffer-current-node (org-roam-node-title org-roam-buffer-current-node))
-    (let* ((title (propertize
-                   (org-roam-node-title org-roam-buffer-current-node)
-                   'face 'bold))
+  (when (or org-roam-buffer-current-node
+            (org-roam-tree--active-search-query))
+    (let* ((query (org-roam-tree--active-search-query))
+           (title (if query
+                      (propertize (format "Search: %s" query) 'face 'bold)
+                    (propertize (org-roam-node-title org-roam-buffer-current-node)
+                                'face 'bold)))
            (btn-list org-roam-tree--header-buttons)
            (btn-width
             (apply #'+
@@ -1333,8 +1552,7 @@ reload."
                              (+ 2 (string-width btn)))
                            btn-list))))
       (setq header-line-format
-            `(
-              ,title
+            `(,title
               (:eval (propertize
                       " "
                       'display '((space :align-to (- right ,btn-width)))))
