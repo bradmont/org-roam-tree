@@ -700,13 +700,218 @@ NODE defaults to `(org-roam-node-at-point)` if nil."
           ;; Clean up temp file
           (delete-file temp-file))))))
 
-(defun org-roam-tree--search-string-rg-command (search-string temp-file)
-  "Return a ripgrep command that searches for SEARCH-STRING as a literal
-word-boundary pattern across the org-roam directory.
-Writes the PCRE2 pattern to TEMP-FILE to avoid shell-escaping issues."
+(defun org-roam-tree--glob-to-pcre2 (query)
+  "Translate a glob-style QUERY string to a PCRE2 pattern string.
+
+Glob wildcards:
+  *   matches zero or more word characters (\\w*)
+  ?   matches exactly one word character (\\w)
+  \\*  literal asterisk
+  \\?  literal question mark
+
+Word-boundary anchors (\\b) are added at each end that does not begin/end
+with a wildcard.  Literal segments are passed through `regexp-quote' so
+that any PCRE2 metacharacters in them are safely escaped."
+  (let ((i 0)
+        (len (length query))
+        (segments '())          ; list of PCRE2 string segments, in reverse
+        (lit-buf "")            ; accumulator for current literal run
+        (starts-with-wild nil)
+        (ends-with-wild nil))
+    (while (< i len)
+      (let ((ch (aref query i)))
+        (cond
+         ;; Escape sequence: \* or \? → literal char, anything else → keep backslash+char
+         ((and (= ch ?\\) (< (1+ i) len)
+               (memq (aref query (1+ i)) '(?* ??)))
+          (setq lit-buf (concat lit-buf (string (aref query (1+ i)))))
+          (setq i (+ i 2)))
+         ;; Glob wildcard *
+         ((= ch ?*)
+          (unless (string-empty-p lit-buf)
+            (push (regexp-quote lit-buf) segments)
+            (setq lit-buf ""))
+          (when (= i 0) (setq starts-with-wild t))
+          (push "\\w*" segments)
+          (setq i (1+ i)))
+         ;; Glob wildcard ?
+         ((= ch ??)
+          (unless (string-empty-p lit-buf)
+            (push (regexp-quote lit-buf) segments)
+            (setq lit-buf ""))
+          (when (= i 0) (setq starts-with-wild t))
+          (push "\\w" segments)
+          (setq i (1+ i)))
+         ;; Ordinary character: accumulate into literal buffer
+         (t
+          (setq lit-buf (concat lit-buf (string ch)))
+          (setq i (1+ i))))))
+    ;; Flush remaining literal buffer
+    (unless (string-empty-p lit-buf)
+      (push (regexp-quote lit-buf) segments))
+    ;; Determine whether the pattern ends with a wildcard
+    (let ((last-seg (car segments)))   ; segments is in reverse, so car = last added
+      (when (member last-seg '("\\w*" "\\w"))
+        (setq ends-with-wild t)))
+    ;; Assemble final pattern with optional \b anchors
+    (concat (if starts-with-wild "" "\\b")
+            (mapconcat #'identity (nreverse segments) "")
+            (if ends-with-wild "" "\\b"))))
+
+(defun org-roam-tree--has-unescaped-glob-p (query)
+  "Return non-nil if QUERY contains an unescaped * or ? character."
+  (let ((i 0) (len (length query)) found)
+    (while (and (< i len) (not found))
+      (let ((ch (aref query i)))
+        (cond
+         ;; Skip escape sequences
+         ((and (= ch ?\\) (< (1+ i) len))
+          (setq i (+ i 2)))
+         ((memq ch '(?* ??))
+          (setq found t)
+          (setq i (1+ i)))
+         (t (setq i (1+ i))))))
+    found))
+
+(defun org-roam-tree--has-pcre2-metachar-p (query)
+  "Return non-nil if QUERY contains PCRE2 metacharacters other than * and ?.
+Detects: . + [ ( { ^ $ and backslash not followed by * ? or b."
+  (let ((i 0) (len (length query)) found)
+    (while (and (< i len) (not found))
+      (let ((ch (aref query i)))
+        (cond
+         ;; Backslash: check next char
+         ((= ch ?\\)
+          (if (< (1+ i) len)
+              (let ((next (aref query (1+ i))))
+                (cond
+                 ;; \* and \? are escaped globs — not a metachar
+                 ((memq next '(?* ??)) (setq i (+ i 2)))
+                 ;; \b is a word boundary — also not a "raw regex" signal
+                 ((= next ?b) (setq i (+ i 2)))
+                 ;; Any other \X is a regex escape
+                 (t (setq found t) (setq i (+ i 2)))))
+            ;; Trailing backslash
+            (setq found t) (setq i (1+ i))))
+         ;; Unambiguous PCRE2 metacharacters (not * or ?)
+         ((memq ch '(?. ?+ ?\[ ?\( ?\{ ?^ ?$))
+          (setq found t) (setq i (1+ i)))
+         (t (setq i (1+ i))))))
+    found))
+
+(defun org-roam-tree--has-boolean-keywords-p (query)
+  "Return non-nil if QUERY contains whole-word AND, OR, or NOT keywords."
+  (or (string-match-p "\\<AND\\>" query)
+      (string-match-p "\\<OR\\>"  query)
+      (string-match-p "\\<NOT\\>" query)))
+
+(defun org-roam-tree--term-to-pcre2 (term)
+  "Convert a single search TERM (possibly with glob wildcards) to PCRE2.
+If TERM is double-quoted, strip quotes and treat as an exact literal phrase.
+Otherwise apply `org-roam-tree--glob-to-pcre2'."
+  (if (and (string-prefix-p "\"" term) (string-suffix-p "\"" term)
+           (> (length term) 1))
+      ;; Exact quoted phrase
+      (format "\\b%s\\b" (regexp-quote (substring term 1 (1- (length term)))))
+    (org-roam-tree--glob-to-pcre2 term)))
+
+(defun org-roam-tree--and-term-to-lookaheads (and-term)
+  "Convert a single AND-clause AND-TERM (possibly containing NOT) to PCRE2 lookaheads.
+Returns a list of lookahead strings.
+
+  \"foo\"         → (\"(?=.*\\\\bfoo\\\\b)\")
+  \"NOT foo\"     → (\"(?!.*\\\\bfoo\\\\b)\")
+  \"foo NOT bar\" → (\"(?=.*\\\\bfoo\\\\b)\" \"(?!.*\\\\bbar\\\\b)\")"
+  (let* ((and-term (string-trim and-term))
+         ;; Split on NOT boundaries; first part may be empty if term starts with NOT
+         (not-parts (split-string and-term "\\<NOT\\>"))
+         (first     (string-trim (car not-parts)))
+         (negations (mapcar #'string-trim (cdr not-parts)))
+         (result    '()))
+    ;; Positive part (may be empty string if clause starts with NOT)
+    (unless (string-empty-p first)
+      (push (format "(?=.*%s)" (org-roam-tree--term-to-pcre2 first)) result))
+    ;; Negative parts
+    (dolist (neg negations)
+      (unless (string-empty-p neg)
+        (push (format "(?!.*%s)" (org-roam-tree--term-to-pcre2 neg)) result)))
+    (nreverse result)))
+
+(defun org-roam-tree--boolean-to-pcre2 (query)
+  "Convert a boolean search QUERY (AND/OR/NOT keywords) to a PCRE2 pattern.
+
+Supported operators (case-sensitive keywords, evaluated left to right):
+  A AND B      →  (?=.*\\bA\\b)(?=.*\\bB\\b).*
+  A OR B       →  \\bA\\b|\\bB\\b
+  NOT A        →  (?!.*\\bA\\b).*
+  A AND NOT B  →  (?=.*\\bA\\b)(?!.*\\bB\\b).*
+
+Precedence: NOT > AND > OR  (standard boolean).
+Individual terms are passed through `org-roam-tree--term-to-pcre2' so
+glob wildcards work inside boolean expressions."
+  ;; OR at top level; within each OR-clause, split on AND; within each AND-
+  ;; token, split on NOT.  `--and-term-to-lookaheads' handles the NOT split.
+  (let* ((or-clauses (split-string query "\\<OR\\>"))
+         (or-parts
+          (mapcar
+           (lambda (or-clause)
+             (let* ((or-clause (string-trim or-clause))
+                    (and-tokens (split-string or-clause "\\<AND\\>"))
+                    (lookaheads (mapcan #'org-roam-tree--and-term-to-lookaheads
+                                        and-tokens)))
+               (if (and (= (length lookaheads) 1)
+                        (string-prefix-p "(?=" (car lookaheads)))
+                   ;; Single positive lookahead: unwrap to a plain match term
+                   (org-roam-tree--term-to-pcre2 (string-trim or-clause))
+                 ;; Multiple lookaheads, or any negative: chain them then .*
+                 (concat (mapconcat #'identity lookaheads "") ".*"))))
+           or-clauses)))
+    (mapconcat #'identity or-parts "|")))
+
+(defun org-roam-tree--parse-search-query (query)
+  "Parse QUERY and return a cons (MODE . PCRE2-PATTERN).
+
+MODE is one of the symbols: literal  glob  boolean  regex
+
+  literal  Plain word, no wildcards, no boolean ops, no regex chars.
+           Wrapped with \\b…\\b word boundaries.
+  glob     Contains unescaped * or ?, no raw PCRE2 metacharacters.
+           Translated via `org-roam-tree--glob-to-pcre2'.
+  boolean  Contains AND/OR/NOT keywords.
+           Translated via `org-roam-tree--boolean-to-pcre2' (glob also works
+           inside boolean terms).
+  regex    Contains PCRE2 metacharacters other than * and ?.
+           Passed through as-is; caller should omit --only-matching."
+  (cond
+   ;; 1. Explicit PCRE2 metacharacters → raw regex mode
+   ((org-roam-tree--has-pcre2-metachar-p query)
+    (cons 'regex query))
+   ;; 2. Boolean keywords → boolean mode (glob is handled inside)
+   ((org-roam-tree--has-boolean-keywords-p query)
+    (cons 'boolean (org-roam-tree--boolean-to-pcre2 query)))
+   ;; 3. Glob wildcards → glob mode
+   ((org-roam-tree--has-unescaped-glob-p query)
+    (cons 'glob (org-roam-tree--glob-to-pcre2 query)))
+   ;; 4. Quoted exact phrase → literal phrase match (strip quotes, no \b split)
+   ((and (string-prefix-p "\"" query) (string-suffix-p "\"" query)
+         (> (length query) 1))
+    (cons 'literal (format "\\b%s\\b"
+                           (regexp-quote (substring query 1 (1- (length query)))))))
+   ;; 5. Plain literal → exact word-boundary match
+   (t
+    (cons 'literal (format "\\b%s\\b" (regexp-quote query))))))
+
+(defun org-roam-tree--search-string-rg-command (search-string temp-file &optional regex-p)
+  "Return a ripgrep command that searches for SEARCH-STRING across the org-roam directory.
+Writes the PCRE2 pattern to TEMP-FILE to avoid shell-escaping issues.
+SEARCH-STRING should already be a PCRE2 pattern (as returned by
+`org-roam-tree--parse-search-query').
+When REGEX-P is non-nil, omit --only-matching (needed for lookahead-based patterns)."
   (with-temp-file temp-file
-    (insert (format "\\b%s\\b" (regexp-quote search-string))))
-  (concat "rg --follow --only-matching --vimgrep --pcre2 --ignore-case "
+    (insert search-string))
+  (concat "rg --follow"
+          (unless regex-p " --only-matching")
+          " --vimgrep --pcre2 --ignore-case "
           (mapconcat (lambda (glob) (concat "--glob " glob))
                      (org-roam--list-files-search-globs org-roam-file-extensions)
                      " ")
@@ -723,16 +928,27 @@ Tree format:
   ((FILENAME . (SIMLINK SIMLINK ...)) ...)
 
 Unlike `org-roam-tree-unlinked-references', this searches for an
-arbitrary literal string rather than the current node's title or aliases,
-and does not exclude any file."
+arbitrary query rather than the current node's title or aliases,
+and does not exclude any file.
+
+The query is interpreted according to its content (see
+`org-roam-tree--parse-search-query' for details):
+
+  Literal   Plain words → exact word-boundary match.
+  Glob      Words with * or ? wildcards → e.g. begin* matches beginning.
+  Boolean   AND / OR / NOT keywords → e.g. \"emacs AND org* NOT export\".
+  Regex     Raw PCRE2 when the query contains metacharacters like . + [ ( etc."
   (let ((search-string (or search-string
                            (read-string "Search org-roam for: "))))
     (when (and (not (string-empty-p search-string))
                (executable-find "rg")
                (not (string-match "PCRE2 is not available"
                                   (shell-command-to-string "rg --pcre2-version"))))
-      (let* ((temp-file (make-temp-file "org-roam-rg-pattern-"))
-             (rg-command (org-roam-tree--search-string-rg-command search-string temp-file))
+      (let* ((parsed    (org-roam-tree--parse-search-query search-string))
+             (pcre2     (cdr parsed))
+             (regex-p   (memq (car parsed) '(regex boolean)))
+             (temp-file (make-temp-file "org-roam-rg-pattern-"))
+             (rg-command (org-roam-tree--search-string-rg-command pcre2 temp-file regex-p))
              (file-tree (make-hash-table :test 'equal)))
         (unwind-protect
             (let* ((results (split-string (shell-command-to-string rg-command) "\n"))
