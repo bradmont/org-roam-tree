@@ -47,7 +47,6 @@ M-x org-roam-tree-search
 #+end_src
 
 Or access it from the org-roam buffer hamburger menu (=☰=) if the buffer is already open.
-#+end_src
 
 The buffer works like any other tree section: fold/expand files to browse matches, =RET= or click to visit and =q= / =Q= / =y= to copy a quote. 
 
