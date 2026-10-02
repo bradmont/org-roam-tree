@@ -1,0 +1,53 @@
+# org-roam-tree.el
+
+## Description
+
+Creates a tree-like backlinks list you can use in your org-roam buffer. There are many ways this can be used, but the defaults organize backlinks/reflinks by their org file source, and by "crosslinks" — other nodes that a backlinking node also links to.
+
+You can reuse the display logic to define different groupings however you can imagine. As it stands, you can quickly make new display sections simply by providing a list of titles and backlinks. Look at `org-roam-tree-backlinks-section` for the pattern, and `org-roam-tree-backlinks` for an example of how to generate the data structure you need.
+
+Arbitrary tree depths are now supported, but they can get pretty heavy to redisplay, so I do not recommend wandering around a large org-roam graph with one of these (like `org-roam-tree-crosslinks-section`) activated. For this reason, the package now adds a small hamburger menu to the header bar of your `*org-roam*` buffer, that lets you quickly change your displayed `org-roam-mode-sections`.
+
+A backlinks tree, grouped by file containing nodes:
+![preview](preview.png)
+
+A crosslinks tree, grouped by crosslinks then by file containing nodes:
+![preview crosslinks](preview_crosslinks.png)
+
+The package should remember fold states for each node, within an Emacs session, making it easy to navigate around and not lose your place.
+
+<video src="preview.webm" autoplay loop muted></video>
+
+## Usage
+
+Enable by loading `org-roam-tree.el`. This will give you the hamburger menu to quickly activate the backlink trees.
+
+I like to have the backlinks tree as the default view. You can do that like this:
+
+```elisp
+(setq! org-roam-mode-sections '(org-roam-tree-backlinks-section))
+;; or for reflinks,
+(setq! org-roam-mode-sections '(org-roam-tree-reflinks-section))
+```
+
+Again, I don't recommend having `-crosslinks-section` as your default view. The simpler views are quite performant, but crosslinks can make Emacs hang while rendering, especially on a large graph or on a throttled processor like a laptop in power saving mode.
+
+Using both `org-roam-tree-backlinks-section` and `org-roam-tree-reflinks-section` at the same time is **buggy and not recommended** (or generally, using more than one tree, if you implement your own).
+
+You can customize `org-roam-tree-default-visible` to enable/disable auto-collapse after building the buffer. This is an integer that sets the default fold level. `0` will show only top levels of the tree (filenames in the default `-backlinks-section`). `1` will expand the next level (titles of nodes in the default section). `2` will show also the next level (node previews in the default), and so on.
+
+## Searching across your notes
+
+`org-roam-tree-search` opens the `*org-roam*` buffer and populates it with every occurrence of an arbitrary string across your org-roam directory, grouped by file.
+
+Call it interactively:
+
+```
+M-x org-roam-tree-search
+```
+
+Or access it from the org-roam buffer hamburger menu (`☰`) if the buffer is already open.
+
+The buffer works like any other tree section: fold/expand files to browse matches, `RET` or click to visit, and `q` / `Q` / `y` to copy a quote.
+
+The search is powered by `rg` with PCRE2 and uses word-boundary matching, so it will not match partial words. The same `rg` requirement as `org-roam-tree-unlinked-references-section` applies.
