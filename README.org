@@ -24,7 +24,6 @@ Enable by loading org-roam-tree.el. This will give you the hamburger menu to qui
 I like to have the backlinks tree as the default view. You can do that like this:
 
 #+begin_src elisp
-
 (setq! org-roam-mode-sections '(org-roam-tree-backlinks-section))
 ;; or for reflinks,
 (setq! org-roam-mode-sections '(org-roam-tree-reflinks-section))
@@ -42,9 +41,7 @@ You can customize =org-roam-tree-default-visible= to enable/disable auto-collaps
 
 Call it interactively:
 
-#+begin_src
-M-x org-roam-tree-search
-#+end_src
+=M-x org-roam-tree-search=
 
 Or access it from the org-roam buffer hamburger menu (=☰=) if the buffer is already open.
 
