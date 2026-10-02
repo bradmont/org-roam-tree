@@ -224,6 +224,31 @@ visible.  Subsequent calls replace the previous search results."
       (with-current-buffer buf
         (org-roam-tree--render-search query)))))
 
+(defmacro with-org-roam-tree-layout (&rest body)
+  "Ensure proper visual layout for Org-roam tree rendering.
+
+- Selects the Org-roam buffer window.
+- Temporarily adds a right margin for tree prefixes to avoid a race
+  condition between inserting buffer prefixes and visual-line reflow.
+- Restores the original margins afterward.
+
+BODY is the code that renders the tree content."
+  `(with-selected-window (get-buffer-window org-roam-buffer)
+     (save-excursion
+       (let ((old-margin (window-margins)))  ; save existing margins
+         (unwind-protect
+             (progn
+               ;; Add 6 columns to the right margin for tree prefixes
+               ;; TODO: for deeper trees, calculate the margin width dynamically.
+               (set-window-margins (selected-window)
+                                   (car old-margin)
+                                   (+ (or (cdr old-margin) 0) 6))
+               ,@body)
+           ;; Restore original margins
+           (set-window-margins (selected-window)
+                               (car old-margin)
+                               (cdr old-margin)))))))
+
 (cl-defun org-roam-tree-section
     (node &key
           (section-heading "Tree Section:")
@@ -396,31 +421,7 @@ PATH is a vector representing the node's position in the tree."
     (string
      (magit-insert-heading (format "%s (%d)" (file-name-nondirectory value) (length children))))))
 
-(defmacro with-org-roam-tree-layout (&rest body)
-  "Ensure proper visual layout for Org-roam tree rendering.
 
-- Selects the Org-roam buffer window.
-- Temporarily adds a right margin for tree prefixes to avodi a race
-  condition between inserting buffer prefixes and visual-line reflow
-- Restores the original margins afterward.
-
-BODY is the code that renders the tree content."
-  `(with-selected-window (get-buffer-window org-roam-buffer)
-     (save-excursion
-     (let ((old-margin (window-margins)))  ; save existing margins
-       (unwind-protect
-           (progn
-             ;; Add 6 columns to the right margin for tree prefixes
-             ;; TODO : for future iterations with greater depth trees, calculate the
-             ;; margin width.
-             (set-window-margins (selected-window)
-                                 (car old-margin)
-                                 (+ (or (cdr old-margin) 0) 6))
-             ,@body)
-         ;; Restore original margins
-         (set-window-margins (selected-window)
-                             (car old-margin)
-                             (cdr old-margin)))))))
 
 (defun org-roam-tree--jit-prefix-range (start end)
   "Prefix all un-prefixed lines between START and END.
