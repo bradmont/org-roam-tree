@@ -16,7 +16,7 @@ A crosslinks tree, grouped by crosslinks then by file containing nodes:
 
 The package should remember fold states for each node, within an Emacs session, making it easy to navigate around and not lose your place.
 
-<video src="preview.webm" autoplay loop muted></video>
+[▶ Watch demo](preview.webm)
 
 ## Usage
 
