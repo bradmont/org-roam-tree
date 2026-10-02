@@ -87,6 +87,18 @@ a removed one -- until the buffer is next refreshed."
   :type 'boolean
   :group 'org-roam-tree)
 
+(defcustom org-roam-tree-sort-mode 'hits
+  "How to sort file-level groups in tree sections.
+
+Possible values:
+  `hits'    — sort descending by number of hits in the file (default).
+  `recency' — sort descending by file modification time (most recent first).
+  `name'    — sort ascending by file base-name."
+  :type '(choice (const :tag "Hits (most matches first)" hits)
+                 (const :tag "Recency (most recently modified first)" recency)
+                 (const :tag "Name (alphabetical)" name))
+  :group 'org-roam-tree)
+
 (defface org-roam-tree-added-face
   '((t :underline t))
   "Face marking a tree entry just converted to a backlink, when
@@ -238,8 +250,7 @@ visible.  Subsequent calls replace the previous search results."
                   (org-roam-tree--render-node
                    n
                    (1+ depth)
-                   is-last-vec)))))))
-(run-with-idle-timer 0.05 nil #'org-roam-tree--apply-folded-state))
+                   is-last-vec))))))))
 
 
 
@@ -569,6 +580,45 @@ and the branch is not last at any other level"
 
 
 
+;;;;;;;;;;;;;;;;;;;; Sort helpers
+
+(defun org-roam-tree--set-sort-mode (mode)
+  "Set `org-roam-tree-sort-mode' to MODE and refresh the org-roam buffer."
+  (setq org-roam-tree-sort-mode mode)
+  (when (get-buffer org-roam-buffer)
+    (org-roam-buffer-refresh)))
+
+(defun org-roam-tree--file-mtime (file)
+  "Return the modification time of FILE as a float, or 0 if unavailable."
+  (let ((attrs (file-attributes file)))
+    (if attrs
+        (float-time (file-attribute-modification-time attrs))
+      0)))
+
+(defun org-roam-tree--sort-file-groups (groups)
+  "Sort a list of (FILE . CHILDREN) GROUPS according to `org-roam-tree-sort-mode'.
+
+In-file ordering of CHILDREN is preserved; only the top-level file
+groups are reordered.
+
+Sort modes:
+  `hits'    — descending by number of children (most matches first).
+  `recency' — descending by file modification time (newest first).
+  `name'    — ascending by file base-name."
+  (cl-case org-roam-tree-sort-mode
+    (hits
+     (sort groups (lambda (a b)
+                    (> (length (cdr a)) (length (cdr b))))))
+    (recency
+     (sort groups (lambda (a b)
+                    (> (org-roam-tree--file-mtime (car a))
+                       (org-roam-tree--file-mtime (car b))))))
+    (name
+     (sort groups (lambda (a b)
+                    (string< (file-name-nondirectory (car a))
+                             (file-name-nondirectory (car b))))))
+    (t groups)))
+
 ;;;;;;;;;;;;;;;;;;;; Sections content definitions
 ;; These are logic for selecting and structuring node trees to
 ;; display.
@@ -599,9 +649,7 @@ NODE defaults to `org-roam-node-at-point` if nil."
                                  (org-roam-backlink-point b)))))
            result))
    table)
-  (sort result (lambda (a b)
-                 (> (length (cdr a))
-                    (length (cdr b))))))))
+  (org-roam-tree--sort-file-groups result))))
 
 (defun org-roam-tree-reflinks (&optional node)
   "Return reflinks of NODE grouped by source file.
@@ -629,7 +677,7 @@ NODE defaults to `org-roam-node-at-point` if nil."
                                      (org-roam-reflink-point b)))))
                result))
        table)
-      result)))
+      (org-roam-tree--sort-file-groups result))))
 
 (defun org-roam-tree-unlinked-references (&optional node)
 
@@ -692,10 +740,7 @@ NODE defaults to `(org-roam-node-at-point)` if nil."
                                                    (org-roam-tree-simlink-row b)))))
                          result))
                  file-tree)
-        (sort result
-              (lambda (a b)
-                (> (length (cdr a))
-                   (length (cdr b)))))
+        (org-roam-tree--sort-file-groups result)
                 ))
           ;; Clean up temp file
           (delete-file temp-file))))))
@@ -984,7 +1029,7 @@ The query is interpreted according to its content (see
                                                            (org-roam-tree-simlink-row b)))))
                                  result))
                          file-tree)
-                (sort result (lambda (a b) (> (length (cdr a)) (length (cdr b)))))))
+                (org-roam-tree--sort-file-groups result)))
           (delete-file temp-file))))))
 
 (cl-defun org-roam-tree-simlink-insert-section (simlink)
@@ -1574,39 +1619,32 @@ at that buffer's own point. Does not change window focus."
 ;;
 
 (defun org-roam-tree--apply-folded-state ()
-  "Walk the Org-roam tree buffer and fold sections based on stored metadata."
-    (with-current-buffer (get-buffer "*org-roam*")
-    ;(magit-section-show-level-4-all)
-    (save-excursion
-      (goto-char (point-min))
-
-                  (vertical-motion 1)
-      (while (and (not (eobp))
-                  (not (eq (magit-current-section) magit-root-section)))
-
-         (when-let ((sec (magit-current-section)))
-           (magit-section-show-children sec))
-
-        (when (get-text-property (point) org-roam-tree--meta-depth)
-          (let* ((meta (org-roam-tree--get-node-metadata (point)))
-                 (node-id (org-roam-node-id org-roam-buffer-current-node))
-                 (path (plist-get meta :path))
-                 (depth (plist-get meta :depth))
-                 (visible (org-roam-tree--node-visible-state node-id path)))
-            (if
-                (and
-                 (if (booleanp visible)
-                     visible
-                   (> depth visible))
-                 (not (magit-section-hidden (magit-current-section))))
-                     
-                (progn
-                  (forward-char (* depth 3)) ; make sure we're in the section
-                (magit-section-hide (magit-current-section)))
-              )))
-        (magit-section-forward)
-        )
-    (force-window-update))))
+  "Walk the Org-roam tree buffer and fold sections based on stored metadata.
+Must run with the org-roam window selected so that magit's section
+visibility machinery and `vertical-motion' use the correct window geometry."
+  (when-let ((win (get-buffer-window org-roam-buffer)))
+    (with-selected-window win
+      (save-excursion
+        (goto-char (point-min))
+        (vertical-motion 1)
+        (while (and (not (eobp))
+                    (not (eq (magit-current-section) magit-root-section)))
+          (when-let ((sec (magit-current-section)))
+            (magit-section-show-children sec))
+          (when (get-text-property (point) org-roam-tree--meta-depth)
+            (let* ((meta  (org-roam-tree--get-node-metadata (point)))
+                   (node-id (org-roam-node-id org-roam-buffer-current-node))
+                   (path  (plist-get meta :path))
+                   (depth (plist-get meta :depth))
+                   (visible (org-roam-tree--node-visible-state node-id path)))
+              (when (and (if (booleanp visible)
+                             visible
+                           (> depth visible))
+                         (not (magit-section-hidden (magit-current-section))))
+                (forward-char (* depth 3)) ; ensure point is inside the section
+                (magit-section-hide (magit-current-section)))))
+          (magit-section-forward))
+        (redisplay t)))))
 
 (defun org-roam-tree--track-toggle (&rest _args)
   "Save fold state for the section just toggled."
@@ -1729,13 +1767,21 @@ that `get-buffer-window' is reliable during the subsequent buffer refresh."
 
 (defun org-roam-tree--header-menu ()
   (popup-menu
-   '("menu"
+   `("menu"
      ["Default section" (org-roam-tree--change-sections org-roam-tree--roam-sections-cookie)]
-     ["Backlinks tree" (org-roam-tree--change-sections '(org-roam-tree-backlinks-section))]
-     ["Reflinks tree" (org-roam-tree--change-sections '(org-roam-tree-reflinks-section))]
-     ["Unlinked References tree" (org-roam-tree--change-sections '(org-roam-tree-unlinked-references-section))]
-     ["Crosslinks tree" (org-roam-tree--change-sections '(org-roam-tree-crosslinks-section))]
-     ["Search string..." (org-roam-tree--search-string-from-menu)])))
+     ["Backlinks tree"            (org-roam-tree--change-sections '(org-roam-tree-backlinks-section))]
+     ["Reflinks tree"             (org-roam-tree--change-sections '(org-roam-tree-reflinks-section))]
+     ["Unlinked References tree"  (org-roam-tree--change-sections '(org-roam-tree-unlinked-references-section))]
+     ["Crosslinks tree"           (org-roam-tree--change-sections '(org-roam-tree-crosslinks-section))]
+     ["Search string..."          (org-roam-tree--search-string-from-menu)]
+     "---"
+     ("Sort"
+      ["Hits (most matches first)"      (org-roam-tree--set-sort-mode 'hits)
+       :style radio :selected ,(eq org-roam-tree-sort-mode 'hits)]
+      ["Recency (most recent first)"    (org-roam-tree--set-sort-mode 'recency)
+       :style radio :selected ,(eq org-roam-tree-sort-mode 'recency)]
+      ["Name (alphabetical)"            (org-roam-tree--set-sort-mode 'name)
+       :style radio :selected ,(eq org-roam-tree-sort-mode 'name)]))))
 
 (defun org-roam-tree--change-sections (sections)
   "Change the sections displayed in org-roam buffer to sections and
@@ -1777,6 +1823,9 @@ active in `org-roam-mode-sections', otherwise nil."
 
 (add-hook 'org-roam-buffer-postrender-functions
           #'org-roam-tree--add-header-buttons)
+
+(add-hook 'org-roam-buffer-postrender-functions
+          #'org-roam-tree--apply-folded-state)
 
 (defun org-roam-tree--redisplay-after-render ()
   "Force redisplay of org-roam buffer after node navigation."
