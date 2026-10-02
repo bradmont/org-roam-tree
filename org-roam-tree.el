@@ -1714,15 +1714,15 @@ visibility machinery and `vertical-motion' use the correct window geometry."
            (if org-roam-tree-follow-point "enabled" "disabled"))
 
   (if org-roam-tree-follow-point
-      (setq org-roam-tree--follow-icon "👁")
-    (setq org-roam-tree--follow-icon "🖈"))
+      (setq org-roam-tree--follow-icon "🧭")
+    (setq org-roam-tree--follow-icon "⚓"))
   (org-roam-tree--update-buttons)
   (org-roam-tree--add-header-buttons)
   )
 
 (if org-roam-tree-follow-point
-      (setq org-roam-tree--follow-icon "👁")
-    (setq org-roam-tree--follow-icon "🖈"))
+      (setq org-roam-tree--follow-icon "🧭")
+    (setq org-roam-tree--follow-icon "⚓"))
 
 (defun org-roam-tree--redisplay-h-advice (orig-fun &rest args)
   (when org-roam-tree-follow-point

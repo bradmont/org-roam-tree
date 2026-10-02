@@ -6,7 +6,7 @@ Creates a tree-like backlinks list you can use in your org-roam buffer. There ar
 
 You can reuse the display logic to define different groupings, how ever you can imagine. As it stands, you can quickly make new display sections simply by providing a list of titles and backlinks. Look at =org-roam-tree-backlinks-section= for the pattern, and =org-roam-tree-backlinks= for an example of how to generate the data structure you need.
 
-Arbitrary tree depths are now supported, but they can get pretty heavy to redisplay, so I do not recommend wandering around a large org-roam graph with one of these (like =org-roam-tree-crosslinks-section= activated. For this reason, the package now adds a small hamburger menu to the header bar of your =*org-roam*= buffer, that lets you quickly change your displayed =org-roam-mode-sections=.
+Arbitrary tree depths are now supported, but they can get pretty heavy to redisplay, so I do not recommend wandering around a large org-roam graph with one of these (like =org-roam-tree-crosslinks-section=) activated. For this reason, the package now adds a small hamburger menu to the header bar of your =*org-roam*= buffer, that lets you quickly change your displayed =org-roam-mode-sections=.
 
 A backlinks tree, grouped by file containing nodes:
 [[file:preview.png]]
@@ -14,8 +14,9 @@ A backlinks tree, grouped by file containing nodes:
 A crosslinks tree, grouped by crosslinks then by file containing nodes:
 [[file:preview_crosslinks.png]]
 
-*There are still a few rough edges. The package is functional, but a work in progress.
+The package should remember fold states for each node, within an emacs session, making it easy to navigate around and not lose your place.
 
+<video src="preview.webm" autoplay loop muted></video>
 * Usage
 
 Enable by loading org-roam-tree.el. This will give you the hamburger menu to quickly activate the backlink trees.
@@ -35,7 +36,7 @@ using both =org-roam-tree-backlinks-section= and =org-roam-tree-reflinks-section
 
 You can customize =org-roam-tree-default-visible= to enable/disable auto-collapse after building the buffer. This is an integer that sets the default fold level. 0 will show only top levels of the tree (filenames in the default -backlinks-section). 1 will expand the next level (titles of nodes in the default section). 2 will show also the next level (node previews in the default), and so on.
 
-** Searching across your notes
+* Searching across your notes
 
 =org-roam-tree-search= opens the =*org-roam*= buffer and populates it with every occurrence of an arbitrary string across your org-roam directory, grouped by file.
 
@@ -45,20 +46,9 @@ Call it interactively:
 M-x org-roam-tree-search
 #+end_src
 
-Or bind it:
-
-#+begin_src elisp
-(keymap-global-set "C-c r s" #'org-roam-tree-search)
+Or access it from the org-roam buffer hamburger menu (=☰=) if the buffer is already open.
 #+end_src
 
-Or call it programmatically from Lisp:
-
-#+begin_src elisp
-(org-roam-tree-search "some text")
-#+end_src
-
-The buffer works like any other tree section: fold/expand files to browse matches, =RET= or click to visit, =c= to convert a match into a proper ID backlink, and =q= / =Q= / =y= to copy a quote. The header shows =Search: <query>= instead of the current node name, since the results are not node-specific. Calling the function again with a different query replaces the results in place.
+The buffer works like any other tree section: fold/expand files to browse matches, =RET= or click to visit and =q= / =Q= / =y= to copy a quote. 
 
 The search is powered by =rg= with PCRE2 and uses word-boundary matching (=\bquery\b=), so it will not match partial words. The same =rg= requirement as =org-roam-tree-unlinked-references-section= applies.
-
-You can also switch to search from the hamburger menu (=☰=) in the =*org-roam*= header line via the /Search string.../ entry.
