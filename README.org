@@ -6,7 +6,7 @@ Creates a tree-like backlinks list you can use in your org-roam buffer. There ar
 
 You can reuse the display logic to define different groupings, how ever you can imagine. As it stands, you can quickly make new display sections simply by providing a list of titles and backlinks. Look at =org-roam-tree-backlinks-section= for the pattern, and =org-roam-tree-backlinks= for an example of how to generate the data structure you need.
 
-Arbitrary tree depths are now supported, but they can get pretty heavy to redisplay, so I do not recommend wandering around a large org-roam graph with one of these (like =org-roam-tree-crosslinks-section=) activated. For this reason, the package now adds a small hamburger menu to the header bar of your =*org-roam*= buffer, that lets you quickly change your displayed =org-roam-mode-sections=.
+Arbitrary tree depths are now supported, but they can get pretty heavy to redisplay, so I do not recommend wandering around a large org-roam graph with one of these (like =org-roam-tree-crosslinks-section=) activated. For this reason, the package now adds a small hamburger menu to the header bar of your ~*org-roam*~ buffer, that lets you quickly change your displayed =org-roam-mode-sections=.
 
 A backlinks tree, grouped by file containing nodes:
 [[file:preview.png]]
@@ -38,7 +38,7 @@ You can customize =org-roam-tree-default-visible= to enable/disable auto-collaps
 
 * Searching across your notes
 
-=org-roam-tree-search= opens the =*org-roam*= buffer and populates it with every occurrence of an arbitrary string across your org-roam directory, grouped by file.
+=org-roam-tree-search= opens the ~*org-roam*~ buffer and populates it with every occurrence of an arbitrary string across your org-roam directory, grouped by file.
 
 Call it interactively:
 
