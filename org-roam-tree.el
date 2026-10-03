@@ -233,21 +233,24 @@ visible.  Subsequent calls replace the previous search results."
 - Restores the original margins afterward.
 
 BODY is the code that renders the tree content."
-  `(with-selected-window (get-buffer-window org-roam-buffer)
-     (save-excursion
-       (let ((old-margin (window-margins)))  ; save existing margins
-         (unwind-protect
-             (progn
-               ;; Add 6 columns to the right margin for tree prefixes
-               ;; TODO: for deeper trees, calculate the margin width dynamically.
-               (set-window-margins (selected-window)
-                                   (car old-margin)
-                                   (+ (or (cdr old-margin) 0) 6))
-               ,@body)
-           ;; Restore original margins
-           (set-window-margins (selected-window)
-                               (car old-margin)
-                               (cdr old-margin)))))))
+  `(let ((org-roam-tree--win (get-buffer-window (current-buffer))))
+     (if org-roam-tree--win
+         (with-selected-window org-roam-tree--win
+           (save-excursion
+             (let ((old-margin (window-margins)))
+               (unwind-protect
+                   (progn
+                     ;; Add 6 columns to the right margin for tree prefixes
+                     ;; TODO: for deeper trees, calculate the margin width dynamically.
+                     (set-window-margins (selected-window)
+                                         (car old-margin)
+                                         (+ (or (cdr old-margin) 0) 6))
+                     ,@body)
+                 ;; Restore original margins
+                 (set-window-margins (selected-window)
+                                     (car old-margin)
+                                     (cdr old-margin))))))
+       (progn ,@body))))
 
 (cl-defun org-roam-tree-section
     (node &key
@@ -374,7 +377,8 @@ PATH is a vector representing the node's position in the tree."
       ;; store tree metadata at node start
       (org-roam-tree--store-node-metadata start depth is-last-vec path)
 
-      (when (< org-roam-tree--prefixed-lines-count (window-body-height))
+      (when (and (get-buffer-window (current-buffer))
+                 (< org-roam-tree--prefixed-lines-count (window-body-height)))
         ;;Prefix the immediately visible nodes. Do the rest lazily.
         (save-excursion
           (goto-char start)
@@ -1619,11 +1623,10 @@ at that buffer's own point. Does not change window focus."
 ;; nodes.
 ;;
 
-(defun org-roam-tree--apply-folded-state ()
-  "Walk the Org-roam tree buffer and fold sections based on stored metadata.
-Must run with the org-roam window selected so that magit's section
-visibility machinery and `vertical-motion' use the correct window geometry."
-  (when-let ((win (get-buffer-window org-roam-buffer)))
+(defun org-roam-tree--do-fold-buffer (buf)
+  "Apply fold state in BUF's window.
+BUF must be displayed in a live window."
+  (when-let ((win (get-buffer-window buf)))
     (with-selected-window win
       (save-excursion
         (goto-char (point-min))
@@ -1642,10 +1645,20 @@ visibility machinery and `vertical-motion' use the correct window geometry."
                              visible
                            (> depth visible))
                          (not (magit-section-hidden (magit-current-section))))
-                (forward-char (* depth 3)) ; ensure point is inside the section
+                (forward-char (* depth 3))
                 (magit-section-hide (magit-current-section)))))
           (magit-section-forward))
         (redisplay t)))))
+
+(defun org-roam-tree--apply-folded-state ()
+  "Apply fold state to the current org-roam tree buffer.
+If the buffer has no window yet (e.g. during `org-roam-buffer-display-dedicated'
+before `display-buffer' is called), defers via a short timer so that the fold
+runs after the buffer is actually displayed."
+  (let ((buf (current-buffer)))
+    (if (get-buffer-window buf)
+        (org-roam-tree--do-fold-buffer buf)
+      (run-with-timer 0.05 nil #'org-roam-tree--do-fold-buffer buf))))
 
 (defun org-roam-tree--track-toggle (&rest _args)
   "Save fold state for the section just toggled."
